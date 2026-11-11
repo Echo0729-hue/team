@@ -1,0 +1,28 @@
+{
+  "name": "code-video-generator",
+  "version": "0.1.0",
+  "private": true,
+  "description": "输入文案，实时预览并导出 15 秒竖屏视频（Next.js + Remotion）",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "render:sample": "node scripts/render-sample.ts"
+  },
+  "dependencies": {
+    "@remotion/bundler": "4.0.541",
+    "@remotion/player": "4.0.541",
+    "@remotion/renderer": "4.0.541",
+    "next": "16.4.5",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "remotion": "4.0.541"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "@types/react": "19.2.7",
+    "@types/react-dom": "19.2.3",
+    "typescript": "5.9.3"
+  }
+}
