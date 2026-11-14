@@ -63,6 +63,7 @@ import {
   type TextLayer,
 } from "@/remotion/layers";
 import type { WorkbenchView } from "./Workbench";
+import type { EditorDraft } from "@/lib/projectDraft";
 
 type TabId = "content" | "visual" | "layers" | "effects" | "voice" | "subtitle";
 
@@ -72,6 +73,7 @@ type GeneratorClientProps = {
   active: boolean;
   onNavigate: (view: WorkbenchView) => void;
   onOpenNav: () => void;
+  demoDraft?: { key: string; initial: EditorDraft; fresh?: boolean };
 };
 
 const LINE_FIELDS = ["line0", "line1", "line2"] as const;
@@ -136,8 +138,8 @@ const icons = {
   ),
 };
 
-export default function GeneratorClient({ active, onNavigate, onOpenNav }: GeneratorClientProps) {
-  const { draft, setDraft, ready: draftReady, storageMessage, restoredTtsId } = useEditorDraft();
+export default function GeneratorClient({ active, onNavigate, onOpenNav, demoDraft }: GeneratorClientProps) {
+  const { draft, setDraft, ready: draftReady, storageMessage, restoredTtsId } = useEditorDraft(demoDraft);
   const [tab, setTab] = useDraftField(draft, setDraft, "tab");
   const [values, setValues] = useDraftField(draft, setDraft, "values");
   const [errors, setErrors] = useState<VideoFieldErrors>({});

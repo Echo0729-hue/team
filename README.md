@@ -47,6 +47,26 @@ npm run dev
 
 打开 http://localhost:3000 。生产模式使用 `npm run build` 后运行 `npm start`。
 
+## 完整功能 Demo
+
+打开 **http://localhost:3000/demo** 进入可交互演示。首次点击“一键准备演示素材”后，服务会使用当前本机的中文音色和真实渲染管线生成三支可编辑样片：
+
+- **数学微课**：Manim 公式变形、函数描线、图片图层、配音与字幕；
+- **图文短片**：文字图层、网页卡片、数据图表和手绘标记；
+- **三维讲解**：Three.js 几何体、空间轨道和镜头运动。
+
+准备完成后，顶部 Demo 引导会按“文案 → 画面 → 图层 → 效果 → 配音 → 字幕”带着演示者走完整流程。工作区的导出按钮会生成真实 MP4，素材库可以重命名和选择片段，视频拼接页可以调整顺序并输出合集。Demo 使用独立的 `codevideo:demo:*` 浏览器草稿，不覆盖日常工作区；服务器生成的演示视频和配音保存在 `output/`，重复准备会复用已有记录。
+
+准备环境：
+
+```sh
+npm run setup:manim
+npm run build
+npm start
+```
+
+已经准备好演示素材后，可运行 `npm run verify:demo` 检查真实视频播放与下载、Manim 画面、草稿隔离、切换与恢复、字幕深链、拼接排序和移动端。测试使用独立浏览器上下文，只清理本次保存的下载副本。
+
 Windows 安装中文语音包后可使用本机配音。云端服务可配置 `TTS_API_KEY`（OpenAI 兼容接口），或 `AZURE_SPEECH_KEY` 和 `AZURE_SPEECH_REGION`；`TTS_PROVIDER=local|azure|openai` 可指定默认服务。
 
 ## 本次修复：正确性与保存

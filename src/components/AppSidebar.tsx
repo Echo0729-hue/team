@@ -37,10 +37,11 @@ type AppSidebarProps = {
   onNavigate: (view: WorkbenchView) => void;
   open: boolean;
   onClose: () => void;
+  demo?: boolean;
 };
 
 /** 左侧主导航：生成视频 / 视频拼接 / 素材库 */
-export default function AppSidebar({ view, onNavigate, open, onClose }: AppSidebarProps) {
+export default function AppSidebar({ view, onNavigate, open, onClose, demo }: AppSidebarProps) {
   const sidebarRef = useRef<HTMLElement>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
@@ -53,7 +54,7 @@ export default function AppSidebar({ view, onNavigate, open, onClose }: AppSideb
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") { event.preventDefault(); closeRef.current(); return; }
       if (event.key !== "Tab") return;
-      const buttons = [...(sidebarRef.current?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ?? [])].filter((element) => element.getClientRects().length);
+      const buttons = [...(sidebarRef.current?.querySelectorAll<HTMLElement>("button:not(:disabled), a[href]") ?? [])].filter((element) => element.getClientRects().length);
       const first = buttons[0], last = buttons[buttons.length - 1];
       if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
@@ -92,6 +93,7 @@ export default function AppSidebar({ view, onNavigate, open, onClose }: AppSideb
             );
           })}
         </nav>
+        <a className="demo-entry" href={demo ? "/" : "/demo"}>{demo ? "返回我的工作区" : "打开完整功能 Demo"}<span aria-hidden="true">↗</span></a>
 
         <div className="sidebar-foot">
           <div className="sidebar-note">

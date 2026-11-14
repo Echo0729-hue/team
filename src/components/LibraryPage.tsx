@@ -56,9 +56,10 @@ const icons = {
 type LibraryPageProps = {
   onNavigate: (view: WorkbenchView) => void;
   onOpenNav: () => void;
+  selectionKey?: string;
 };
 
-export default function LibraryPage({ onNavigate, onOpenNav }: LibraryPageProps) {
+export default function LibraryPage({ onNavigate, onOpenNav, selectionKey = SELECTION_KEY }: LibraryPageProps) {
   const [items, setItems] = useState<PublicLibraryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -121,19 +122,19 @@ export default function LibraryPage({ onNavigate, onOpenNav }: LibraryPageProps)
   const addToMerge = useCallback(
     (id: string) => {
       try {
-        const raw = window.localStorage.getItem(SELECTION_KEY);
+        const raw = window.localStorage.getItem(selectionKey);
         const parsed: unknown = raw ? JSON.parse(raw) : [];
         const ids = Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string") : [];
         if (!ids.includes(id)) {
           ids.push(id);
         }
-        window.localStorage.setItem(SELECTION_KEY, JSON.stringify(ids));
+        window.localStorage.setItem(selectionKey, JSON.stringify(ids));
       } catch {
         // 忽略写入失败
       }
       onNavigate("merge");
     },
-    [onNavigate],
+    [onNavigate, selectionKey],
   );
 
   const saveRename = useCallback(
@@ -188,8 +189,8 @@ export default function LibraryPage({ onNavigate, onOpenNav }: LibraryPageProps)
       }
       setItems((previous) => previous.filter((entry) => entry.id !== deleting.id));
       try {
-        const raw = JSON.parse(window.localStorage.getItem(SELECTION_KEY) ?? "[]");
-        if (Array.isArray(raw)) window.localStorage.setItem(SELECTION_KEY, JSON.stringify(raw.filter((id) => id !== deleting.id)));
+        const raw = JSON.parse(window.localStorage.getItem(selectionKey) ?? "[]");
+        if (Array.isArray(raw)) window.localStorage.setItem(selectionKey, JSON.stringify(raw.filter((id) => id !== deleting.id)));
       } catch {}
       setToast(`已删除「${deleting.name}」`);
       setDeleting(null);
@@ -199,7 +200,7 @@ export default function LibraryPage({ onNavigate, onOpenNav }: LibraryPageProps)
     } finally {
       setDeleteBusy(false);
     }
-  }, [deleting, load]);
+  }, [deleting, load, selectionKey]);
 
   return (
     <>

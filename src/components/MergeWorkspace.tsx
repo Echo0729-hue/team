@@ -70,9 +70,12 @@ type MergeWorkspaceProps = {
   active: boolean;
   onNavigate: (view: WorkbenchView) => void;
   onOpenNav: () => void;
+  storageKeys?: { selection: string; project: string };
 };
 
-export default function MergeWorkspace({ active, onNavigate, onOpenNav }: MergeWorkspaceProps) {
+export default function MergeWorkspace({ active, onNavigate, onOpenNav, storageKeys }: MergeWorkspaceProps) {
+  const selectionKey = storageKeys?.selection ?? SELECTION_KEY;
+  const projectKey = storageKeys?.project ?? PROJECT_KEY;
   const [items, setItems] = useState<PublicLibraryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [libraryError, setLibraryError] = useState<string | null>(null);
@@ -130,8 +133,8 @@ export default function MergeWorkspace({ active, onNavigate, onOpenNav }: MergeW
   // 恢复上次的拼接顺序
   useEffect(() => {
     try {
-      setSelectedIds(decodeSelection(window.localStorage.getItem(SELECTION_KEY)));
-      const raw = window.localStorage.getItem(PROJECT_KEY);
+      setSelectedIds(decodeSelection(window.localStorage.getItem(selectionKey)));
+      const raw = window.localStorage.getItem(projectKey);
       if (raw) {
         const saved = JSON.parse(raw);
         if (!saved || saved.version !== 1) throw new Error("Unknown project");
@@ -144,24 +147,24 @@ export default function MergeWorkspace({ active, onNavigate, onOpenNav }: MergeW
       setStorageError("拼接草稿读取失败，原记录已保留；本次修改暂未自动保存。");
     }
     setReady(true);
-  }, []);
+  }, [projectKey, selectionKey]);
 
   useEffect(() => {
     if (!ready || !active || !canSave.current) return;
     // The library can add selections while this workspace is hidden.
-    try { setSelectedIds(decodeSelection(window.localStorage.getItem(SELECTION_KEY))); } catch {}
-  }, [active, ready]);
+    try { setSelectedIds(decodeSelection(window.localStorage.getItem(selectionKey))); } catch {}
+  }, [active, ready, selectionKey]);
 
   useEffect(() => {
     if (!ready || !canSave.current) return;
     try {
-      window.localStorage.setItem(SELECTION_KEY, JSON.stringify(selectedIds));
-      window.localStorage.setItem(PROJECT_KEY, JSON.stringify({ version: 1, ratio: ratioOverride, background, jobId }));
+      window.localStorage.setItem(selectionKey, JSON.stringify(selectedIds));
+      window.localStorage.setItem(projectKey, JSON.stringify({ version: 1, ratio: ratioOverride, background, jobId }));
       setStorageError(null);
     } catch {
       setStorageError("拼接草稿保存失败，请保留当前页面并检查浏览器存储空间。");
     }
-  }, [selectedIds, ratioOverride, background, jobId, ready]);
+  }, [selectedIds, ratioOverride, background, jobId, ready, projectKey, selectionKey]);
 
   useEffect(() => {
     if (!active) {

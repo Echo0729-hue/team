@@ -3,8 +3,9 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { createEditorDraft, decodeEditorDraft, DRAFT_KEY, encodeEditorDraft, type EditorDraft } from "@/lib/projectDraft";
 
-export function useEditorDraft() {
-  const [draft, setDraft] = useState<EditorDraft>(createEditorDraft);
+export function useEditorDraft(options?: { key: string; initial: EditorDraft; fresh?: boolean }) {
+  const storageKey = options?.key ?? DRAFT_KEY;
+  const [draft, setDraft] = useState<EditorDraft>(() => options?.initial ?? createEditorDraft());
   const [ready, setReady] = useState(false);
   const [storageMessage, setStorageMessage] = useState("正在读取草稿…");
   const [restoredTtsId, setRestoredTtsId] = useState<string | null>(null);
@@ -14,14 +15,22 @@ export function useEditorDraft() {
 
   useEffect(() => {
     try {
-      const raw = window.localStorage.getItem(DRAFT_KEY);
+      const raw = options?.fresh ? null : window.localStorage.getItem(storageKey);
       if (raw) {
         const restored = decodeEditorDraft(raw);
         setRestoredTtsId(restored.ttsId);
         latest.current = restored;
         setDraft(restored);
         setStorageMessage("已恢复草稿 · 保存在当前浏览器");
-      } else setStorageMessage("草稿自动保存在当前浏览器");
+      } else {
+        setRestoredTtsId(options?.initial.ttsId ?? null);
+        setStorageMessage("草稿自动保存在当前浏览器");
+      }
+      if (options?.fresh) {
+        const url = new URL(window.location.href);
+        url.searchParams.delete("fresh");
+        window.history.replaceState(null, "", url.pathname + url.search + url.hash);
+      }
       canSave.current = true;
     } catch {
       // Keep unreadable data intact; do not replace it with defaults.
@@ -33,12 +42,12 @@ export function useEditorDraft() {
   const flush = useCallback(() => {
     if (!canSave.current) return;
     try {
-      window.localStorage.setItem(DRAFT_KEY, encodeEditorDraft(latest.current));
+      window.localStorage.setItem(storageKey, encodeEditorDraft(latest.current));
       setStorageMessage("草稿已自动保存 · 当前浏览器");
     } catch {
       setStorageMessage("自动保存失败，请检查浏览器存储空间并保留当前页面。");
     }
-  }, []);
+  }, [storageKey]);
 
   useEffect(() => {
     if (!ready) return;

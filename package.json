@@ -17,6 +17,7 @@
     "verify:effects": "tsx scripts/verify-effects.mts",
     "setup:manim": "node scripts/setup-manim.mjs",
     "verify:manim": "tsx scripts/verify-manim.mts",
+    "verify:demo": "tsx scripts/verify-demo.mts",
     "render:sample": "tsx scripts/render-sample.ts"
   },
   "dependencies": {

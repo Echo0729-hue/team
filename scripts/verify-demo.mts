@@ -1,0 +1,150 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { createHash } from "node:crypto";
+import { chromium } from "playwright";
+import { createEditorDraft, DRAFT_KEY, encodeEditorDraft } from "../src/lib/projectDraft";
+import { demoDraftKey, DEMO_SELECTION_KEY, DEMO_SAMPLES, type DemoStatus } from "../src/demo/projects";
+
+const base = process.env.TEST_BASE_URL ?? "http://127.0.0.1:3000";
+const output = path.resolve("test-results/demo"); fs.mkdirSync(output, { recursive: true });
+const passed: string[] = [], errors: string[] = [], savedFiles: string[] = [];
+const check = (name: string, value: unknown) => { assert.ok(value, name); passed.push(name); console.log(`PASS ${name}`); };
+const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+const browser = await chromium.launch({ headless: true, ...(process.platform === "win32" ? { channel: "msedge" } : {}) });
+const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+page.on("pageerror", error => errors.push(error.message));
+try {
+  const status = await (await fetch(`${base}/api/demo`, { cache: "no-store" })).json() as DemoStatus;
+  check("demo preparation has three sample videos", status.status === "ready" && Object.keys(status.manifest.samples).length === 3);
+  check("demo preparation has a merged showcase video", typeof status.manifest.mergedId === "string");
+  const before = await (await fetch(`${base}/api/library`)).json();
+  const reused = await (await fetch(`${base}/api/demo`, { method: "POST" })).json() as DemoStatus;
+  const after = await (await fetch(`${base}/api/library`)).json();
+  check("repeated preparation reuses videos without adding duplicates", reused.status === "ready" &&
+    DEMO_SAMPLES.every(sample => reused.manifest.samples[sample.id]?.videoId === status.manifest.samples[sample.id]?.videoId) &&
+    reused.manifest.mergedId === status.manifest.mergedId && before.items.length === after.items.length);
+  check("foreign sites cannot start demo preparation", (await fetch(`${base}/api/demo`, { method: "POST", headers: { origin: "https://example.com" } })).status === 403);
+  const ordinary = createEditorDraft();
+  ordinary.values.title = "日常工作区的草稿";
+  ordinary.videoName = "保留我的项目";
+  ordinary.nameTouched = true;
+  const originalKeys = {
+    [DRAFT_KEY]: encodeEditorDraft(ordinary),
+    "codevideo:merge:selection": JSON.stringify([status.manifest.samples.math!.videoId]),
+    "codevideo:merge:project:v1": JSON.stringify({ version: 1, ratio: "1:1", background: "#123456", jobId: null }),
+    "codevideo:view": "generate",
+  };
+  // A disposable browser context keeps the user's actual browser drafts untouched.
+  await page.addInitScript(keys => {
+    if (localStorage.getItem("demo-test-seeded")) return;
+    for (const [key, value] of Object.entries(keys)) localStorage.setItem(key, value);
+    localStorage.setItem("demo-test-seeded", "true");
+  }, originalKeys);
+  await page.goto(`${base}/demo?scene=math`, { waitUntil: "networkidle" });
+  check("demo page exposes the guided route", await page.getByText("按这条路线演示完整功能", { exact: true }).count() === 1);
+  await page.locator('img[data-renderer="manim"]').first().waitFor();
+  check("math sample restores real Manim frames", await page.locator('img[data-renderer="manim"]').count() >= 1);
+  check("demo guide links to every editor stage", await page.locator(".demo-guide a").count() === 6);
+  check("demo sample selector starts on math", await page.getByRole("combobox", { name: "示例项目" }).inputValue() === "math");
+  await page.getByRole("tab", { name: /^内容/ }).click();
+  await page.locator("#title").fill("修改后的数学微课");
+  await page.waitForFunction(key => JSON.parse(localStorage.getItem(key) ?? "{}").data?.values.title === "修改后的数学微课", demoDraftKey("math"));
+  await page.getByRole("alert").filter({ hasText: "配音已过期" }).waitFor();
+  check("editing a prepared demo invalidates old narration", await page.getByRole("alert").filter({ hasText: "配音已过期" }).isVisible());
+  await page.getByRole("combobox", { name: "示例项目" }).selectOption("space");
+  await page.locator(".effect-stack li").first().waitFor();
+  check("switching sample loads independent editable effects", await page.locator(".effect-stack li").count() === 3);
+  await page.getByRole("tab", { name: /^内容/ }).click();
+  check("a different sample keeps its own content", await page.locator("#title").inputValue() === "换个角度看空间");
+  await page.locator("#title").fill("我编辑的三维项目");
+  await page.getByRole("combobox", { name: "示例项目" }).selectOption("math");
+  await page.locator("#title").waitFor();
+  check("switching back restores edited demo content", await page.locator("#title").inputValue() === "修改后的数学微课");
+  await page.reload({ waitUntil: "networkidle" });
+  check("refresh restores the selected sample and its edits", await page.getByRole("combobox", { name: "示例项目" }).inputValue() === "math" && await page.locator("#title").inputValue() === "修改后的数学微课");
+  await page.getByRole("link", { name: "恢复本示例", exact: true }).click();
+  await page.getByRole("tab", { name: /^内容/ }).click();
+  await page.waitForFunction(() => (document.querySelector("#title") as HTMLInputElement)?.value === "看见正弦函数");
+  check("reset restores the selected original demo", await page.locator("#title").inputValue() === "看见正弦函数");
+  check("reset preserves other edited samples", await page.evaluate(key => JSON.parse(localStorage.getItem(key) ?? "{}").data?.values.title, demoDraftKey("space")) === "我编辑的三维项目");
+  await page.getByRole("tab", { name: /^配音/ }).click();
+  await page.getByText(/^配音已生成 ·/).waitFor();
+  check("reset restores playable narration metadata", await page.getByText(/^配音已生成 ·/).isVisible());
+  await page.locator(".demo-guide a").filter({ hasText: "改字幕" }).click();
+  await page.locator('[aria-label="第 1 屏字幕"]').waitFor();
+  check("guide opens editable timed subtitles", await page.getByRole("tab", { name: /^字幕/ }).getAttribute("aria-selected") === "true" && await page.locator('[aria-label^="第 "][aria-label$=" 屏字幕"]').count() >= 4);
+  await page.locator(".demo-watch > summary").click();
+  const video = page.locator(".demo-watch video.result-video");
+  await video.waitFor();
+  await page.waitForFunction(() => [...document.querySelectorAll("audio")].filter(node => node.src.includes("/api/tts/")).every(node => node.paused));
+  const pausedAudio = await page.locator("audio").evaluateAll(nodes => nodes.filter(node => node.src.includes("/api/tts/")).map(node => node.currentTime));
+  await page.waitForTimeout(700);
+  check("opening demo video pauses the editor narration", pausedAudio.length > 0 && await page.locator("audio").evaluateAll((nodes, times) => nodes.filter(node => node.src.includes("/api/tts/")).every((node, index) => node.paused && node.currentTime === times[index]), pausedAudio));
+  await page.waitForFunction(() => (document.querySelector(".demo-watch video") as HTMLVideoElement)?.readyState >= 1);
+  check("sample video has a real 15-second timeline", await video.evaluate((node: HTMLVideoElement) => Math.abs(node.duration - 15) < .1));
+  await video.evaluate((node: HTMLVideoElement) => { node.muted = true; return node.play(); });
+  await page.waitForFunction(() => (document.querySelector(".demo-watch video") as HTMLVideoElement)?.currentTime > .2);
+  check("prepared sample actually plays", await video.evaluate((node: HTMLVideoElement) => !node.paused && node.currentTime > .2));
+  await page.locator(".demo-watch").getByRole("button", { name: "全屏播放", exact: true }).click();
+  await page.waitForFunction(() => !!document.fullscreenElement || !!document.querySelector(".is-page-fullscreen"));
+  await page.waitForTimeout(1200);
+  check("demo fullscreen remains open and fills the viewport", await page.locator(".lightbox-panel").evaluate(node => { const rect = node.getBoundingClientRect(); return Math.abs(rect.width - innerWidth) < 2 && Math.abs(rect.height - innerHeight) < 2; }));
+  await page.getByRole("button", { name: "关闭预览", exact: true }).click();
+  await page.getByRole("combobox", { name: "播放内容" }).selectOption("merge");
+  await page.waitForFunction(() => (document.querySelector(".demo-watch video") as HTMLVideoElement)?.duration > 44);
+  check("showcase switches to the real 45-second merged video", await video.evaluate((node: HTMLVideoElement) => Math.abs(node.duration - 45) < .1));
+  const savedResponse = page.waitForResponse(response => response.url().endsWith(`/api/videos/${status.manifest.mergedId}/save`) && response.request().method() === "POST");
+  await page.getByRole("button", { name: "下载示范 MP4", exact: true }).click();
+  const saved = await (await savedResponse).json();
+  assert.ok(saved.saved?.path, JSON.stringify(saved));
+  savedFiles.push(saved.saved.path);
+  const downloaded = fs.readFileSync(saved.saved.path);
+  const source = new Uint8Array(await (await fetch(`${base}/api/videos/${status.manifest.mergedId}`)).arrayBuffer());
+  check("demo download saves the actual merged MP4", downloaded.byteLength > 0 && hash(downloaded) === hash(source));
+  await page.locator(".demo-watch > summary").click();
+  await page.locator(".sidebar .nav-item").filter({ hasText: "视频拼接" }).click();
+  await page.locator(".segment-list li").first().waitFor();
+  check("merge workspace starts with all three prepared samples", await page.locator(".segment-list li").count() === 3);
+  const previousOrder = await page.evaluate(key => localStorage.getItem(key), DEMO_SELECTION_KEY);
+  await page.locator(".segment-list li").first().getByRole("button", { name: /^下移/ }).click();
+  await page.waitForFunction(({ key, old }) => localStorage.getItem(key) !== old, { key: DEMO_SELECTION_KEY, old: previousOrder });
+  check("demo merge supports reordering", await page.evaluate(key => JSON.parse(localStorage.getItem(key) ?? "[]")[0], DEMO_SELECTION_KEY) === status.manifest.samples.story!.videoId);
+  check("demo editing and navigation preserve every ordinary workspace key", await page.evaluate(keys => Object.entries(keys).every(([key, value]) => localStorage.getItem(key) === value), originalKeys));
+  await page.goto(`${base}/demo?scene=math&tab=effects#generate`, { waitUntil: "networkidle" });
+  await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>('img[data-renderer="manim"]')].some(node => node.complete && node.naturalWidth > 0));
+  await page.screenshot({ path: path.join(output, "demo-verified.png"), fullPage: true });
+  await page.getByRole("link", { name: "返回我的工作区" }).click();
+  await page.locator("#title").waitFor();
+  check("returning home restores the ordinary project", await page.locator("#title").inputValue() === ordinary.values.title);
+  const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  mobile.on("pageerror", error => errors.push(error.message));
+  await mobile.goto(`${base}/demo?scene=story&tab=content`, { waitUntil: "networkidle" });
+  check("mobile deep link opens the selected sample", await mobile.getByRole("combobox", { name: "示例项目" }).inputValue() === "story" && await mobile.locator("#title").inputValue() === "把知识讲生动");
+  check("mobile demo has no horizontal overflow", await mobile.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  await mobile.locator(".demo-guide > summary").click();
+  check("mobile guide can collapse to leave editing space", await mobile.locator(".demo-guide").getAttribute("open") === null);
+  await mobile.getByRole("button", { name: "打开导航", exact: true }).click();
+  await mobile.locator(".demo-entry").focus();
+  await mobile.keyboard.press("Tab");
+  check("mobile navigation includes demo link in keyboard focus loop", await mobile.getByRole("button", { name: "收起导航", exact: true }).evaluate(node => node === document.activeElement));
+  await mobile.keyboard.press("Escape");
+  await mobile.screenshot({ path: path.join(output, "demo-mobile.png"), fullPage: true });
+  // Check first-visit and recoverable failure UI without changing server assets.
+  const onboarding = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  onboarding.on("pageerror", error => errors.push(error.message));
+  await onboarding.route("**/api/demo", route => route.fulfill({ json: { status: route.request().method() === "POST" ? "failed" : "idle", message: "测试环境缺少中文音色，请安装后重试。", progress: 0, manifest: { version: 1, samples: {} } } }));
+  await onboarding.goto(`${base}/demo`, { waitUntil: "networkidle" });
+  check("first visit explains preparation without overflowing on mobile", await onboarding.getByRole("button", { name: "一键准备演示素材", exact: true }).isEnabled() && await onboarding.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  await onboarding.getByRole("button", { name: "一键准备演示素材", exact: true }).click();
+  await onboarding.getByRole("button", { name: "继续准备演示素材", exact: true }).waitFor();
+  check("preparation failure exposes a retry and useful message", await onboarding.getByRole("alert").filter({ hasText: "中文音色" }).innerText().then(value => value.includes("中文音色")));
+  await onboarding.getByRole("button", { name: "先进入编辑器", exact: true }).click();
+  await onboarding.getByRole("combobox", { name: "示例项目" }).waitFor();
+  check("editor remains accessible before media preparation", await onboarding.getByRole("combobox", { name: "示例项目" }).inputValue() === "math");
+  check("demo has no browser runtime errors", errors.length === 0);
+} finally {
+  await browser.close();
+  for (const file of savedFiles) fs.rmSync(file, { force: true });
+  fs.writeFileSync(path.join(output, "verification.json"), JSON.stringify({ passed, errors }, null, 2));
+}
