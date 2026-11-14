@@ -45,6 +45,7 @@ try {
   check("demo page exposes the guided route", await page.getByText("按这条路线演示完整功能", { exact: true }).count() === 1);
   await page.locator('img[data-renderer="manim"]').first().waitFor();
   check("math sample restores real Manim frames", await page.locator('img[data-renderer="manim"]').count() >= 1);
+  check("initial Manim preview matches the displayed playhead", await page.locator('img[data-renderer="manim"]').first().getAttribute("data-manim-frame") === "24" && await page.locator("#effect-playhead").inputValue() === "24");
   check("demo guide links to every editor stage", await page.locator(".demo-guide a").count() === 6);
   check("demo sample selector starts on math", await page.getByRole("combobox", { name: "示例项目" }).inputValue() === "math");
   await page.getByRole("tab", { name: /^内容/ }).click();

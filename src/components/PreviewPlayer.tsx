@@ -116,7 +116,7 @@ export default function PreviewPlayer({
             alwaysShowControls
             loop={!editing}
             autoPlay={!editing && active}
-            initialFrame={editing ? 0 : 24}
+            initialFrame={editing ? Math.max(0, Math.min(durationInFrames - 1, seekFrame ?? 0)) : 24}
             clickToPlay={!editing}
             allowFullscreen={false}
             doubleClickToFullscreen={false}

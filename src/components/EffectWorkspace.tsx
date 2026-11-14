@@ -109,7 +109,7 @@ export default function EffectWorkspace({ effects, setEffects, selectedId, onSel
   const [category, setCategory] = useState<EffectCategory>("web");
   const [message, setMessage] = useState("");
   const [frame, setFrame] = useState(24);
-  const [seek, setSeek] = useState<number>();
+  const [seek, setSeek] = useState<number>(24);
   const [mobilePanel, setMobilePanel] = useState<"library" | "inspector">("library");
   const total = getDurationInFrames(previewProps);
   const selected = (previewProps.effects ?? []).find((effect) => effect.id === selectedId);
