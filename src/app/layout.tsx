@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import "./workbench.css";
 
 export const metadata: Metadata = {
   title: "代码生成视频 · Remotion Studio",

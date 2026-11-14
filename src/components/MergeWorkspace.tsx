@@ -1,18 +1,27 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import MergePreview from "./MergePreview";
 import SiteHeader from "./SiteHeader";
 import Toast from "./Toast";
-import VideoLightbox from "./VideoLightbox";
+import VideoLightbox, { type VideoLightboxHandle } from "./VideoLightbox";
+import ResultVideo from "./ResultVideo";
+import DownloadVideo from "./DownloadVideo";
+import AnimatedContent from "./react-bits/AnimatedContent";
 import type { PublicJob } from "@/lib/jobs";
 import type { PublicLibraryItem } from "@/lib/library";
 import type { MergeSegment } from "@/remotion/merge";
 import { DEFAULT_MERGE_PROPS } from "@/remotion/merge";
-import { RATIO_MAP, VIDEO_CONFIG, VIDEO_RATIOS, getVideoSize, type RatioId } from "@/remotion/params";
+import { RATIO_MAP, VIDEO_CONFIG, VIDEO_RATIOS, getVideoSize, isRatioId, type RatioId } from "@/remotion/params";
 import type { WorkbenchView } from "./Workbench";
 
 const SELECTION_KEY = "codevideo:merge:selection";
+const PROJECT_KEY = "codevideo:merge:project:v1";
+const decodeSelection = (raw: string | null): string[] => {
+  const data: unknown = raw ? JSON.parse(raw) : [];
+  return Array.isArray(data) ? [...new Set(data.filter((id): id is string => typeof id === "string"))] : [];
+};
 
 const STATUS_TEXT: Record<PublicJob["status"], string> = {
   queued: "排队中",
@@ -58,15 +67,22 @@ const icons = {
 };
 
 type MergeWorkspaceProps = {
+  active: boolean;
   onNavigate: (view: WorkbenchView) => void;
   onOpenNav: () => void;
 };
 
-export default function MergeWorkspace({ onNavigate, onOpenNav }: MergeWorkspaceProps) {
+export default function MergeWorkspace({ active, onNavigate, onOpenNav }: MergeWorkspaceProps) {
   const [items, setItems] = useState<PublicLibraryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [libraryError, setLibraryError] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [ready, setReady] = useState(false);
+  const [libraryLoaded, setLibraryLoaded] = useState(false);
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [storageError, setStorageError] = useState<string | null>(null);
+  const canSave = useRef(false);
+  const [resultOpen, setResultOpen] = useState(false);
   const [playing, setPlaying] = useState<PublicLibraryItem | null>(null);
   const [query, setQuery] = useState("");
   const [ratioOverride, setRatioOverride] = useState<RatioId | null>(null);
@@ -78,6 +94,11 @@ export default function MergeWorkspace({ onNavigate, onOpenNav }: MergeWorkspace
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const [zoomOpen, setZoomOpen] = useState(false);
+  const zoomRef = useRef<VideoLightboxHandle>(null);
+  const openPreviewFullscreen = () => {
+    flushSync(() => setZoomOpen(true));
+    void zoomRef.current?.enterFullscreen();
+  };
   const [toast, setToast] = useState<string | null>(null);
   const pollTimer = useRef<number | null>(null);
   const refreshedJobId = useRef<string | null>(null);
@@ -93,6 +114,7 @@ export default function MergeWorkspace({ onNavigate, onOpenNav }: MergeWorkspace
         return;
       }
       setItems(data.items);
+      setLibraryLoaded(true);
       setLibraryError(null);
     } catch {
       setLibraryError("无法连接素材服务，请确认服务仍在运行。");
@@ -102,43 +124,77 @@ export default function MergeWorkspace({ onNavigate, onOpenNav }: MergeWorkspace
   }, []);
 
   useEffect(() => {
-    void loadLibrary();
-  }, [loadLibrary]);
+    if (active) void loadLibrary();
+  }, [active, loadLibrary]);
 
   // 恢复上次的拼接顺序
   useEffect(() => {
     try {
-      const raw = window.localStorage.getItem(SELECTION_KEY);
-      if (!raw) {
-        return;
+      setSelectedIds(decodeSelection(window.localStorage.getItem(SELECTION_KEY)));
+      const raw = window.localStorage.getItem(PROJECT_KEY);
+      if (raw) {
+        const saved = JSON.parse(raw);
+        if (!saved || saved.version !== 1) throw new Error("Unknown project");
+        setRatioOverride(isRatioId(saved.ratio) ? saved.ratio : null);
+        if (typeof saved.background === "string" && /^#[a-f\d]{6}$/i.test(saved.background)) setBackground(saved.background);
+        if (typeof saved.jobId === "string" && /^[a-f\d-]{36}$/i.test(saved.jobId)) setJobId(saved.jobId);
       }
-      const parsed: unknown = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        setSelectedIds(parsed.filter((id): id is string => typeof id === "string"));
-      }
+      canSave.current = true;
     } catch {
-      // 忽略损坏的本地记录
+      setStorageError("拼接草稿读取失败，原记录已保留；本次修改暂未自动保存。");
     }
+    setReady(true);
   }, []);
 
   useEffect(() => {
+    if (!ready || !active || !canSave.current) return;
+    // The library can add selections while this workspace is hidden.
+    try { setSelectedIds(decodeSelection(window.localStorage.getItem(SELECTION_KEY))); } catch {}
+  }, [active, ready]);
+
+  useEffect(() => {
+    if (!ready || !canSave.current) return;
     try {
       window.localStorage.setItem(SELECTION_KEY, JSON.stringify(selectedIds));
+      window.localStorage.setItem(PROJECT_KEY, JSON.stringify({ version: 1, ratio: ratioOverride, background, jobId }));
+      setStorageError(null);
     } catch {
-      // 忽略写入失败
+      setStorageError("拼接草稿保存失败，请保留当前页面并检查浏览器存储空间。");
     }
-  }, [selectedIds]);
+  }, [selectedIds, ratioOverride, background, jobId, ready]);
+
+  useEffect(() => {
+    if (!active) {
+      setPlaying(null);
+      setZoomOpen(false);
+    }
+  }, [active, zoomOpen, playing]);
+
+  useEffect(() => {
+    if (!ready || !jobId) return;
+    const controller = new AbortController();
+    void fetch(`/api/jobs/${jobId}`, { cache: "no-store", signal: controller.signal }).then(async (response) => {
+      const data = await response.json();
+      if (controller.signal.aborted) return;
+      if (response.ok && data.job) setJob(data.job);
+      else if (response.status === 404) {
+        setJob(null); setJobId(null);
+        setPollError("上次拼接任务已失效，已保留片段与设置，请重新导出。");
+      } else setPollError("暂时无法恢复拼接进度，请刷新重试。");
+    }).catch(() => { if (!controller.signal.aborted) setPollError("暂时无法恢复拼接进度，请刷新重试。"); });
+    return () => controller.abort();
+  }, [jobId, ready]);
 
   // 素材被删除时自动从拼接序列剔除
   useEffect(() => {
-    if (items.length === 0) {
+    if (!libraryLoaded || !ready) {
       return;
     }
     setSelectedIds((previous) => {
       const next = previous.filter((id) => items.some((item) => item.id === id));
       return next.length === previous.length ? previous : next;
     });
-  }, [items]);
+  }, [items, libraryLoaded, ready]);
 
   const itemMap = useMemo(() => new Map(items.map((item) => [item.id, item])), [items]);
   const segmentItems = useMemo(
@@ -160,7 +216,7 @@ export default function MergeWorkspace({ onNavigate, onOpenNav }: MergeWorkspace
   const isWorking = submitting || isBusy;
   const progressPercent = Math.round((job?.progress ?? 0) * 100);
   const statusKey = job ? job.status : "idle";
-  const canExport = segments.length >= 2 && !isWorking;
+  const canExport = ready && segments.length >= 2 && !isWorking;
 
   const filtered = useMemo(() => {
     const keyword = query.trim().toLowerCase();
@@ -211,6 +267,11 @@ export default function MergeWorkspace({ onNavigate, onOpenNav }: MergeWorkspace
       try {
         const response = await fetch(`/api/jobs/${job.id}`, { cache: "no-store", signal: controller.signal });
         if (!response.ok) {
+          if (response.status === 404) {
+            setJob(null); setJobId(null);
+            setPollError("拼接任务已失效，已保留片段与设置，请重新导出。");
+            return;
+          }
           setPollError(`查询进度失败（HTTP ${response.status}），正在重试…`);
           return;
         }
@@ -268,6 +329,7 @@ export default function MergeWorkspace({ onNavigate, onOpenNav }: MergeWorkspace
         return;
       }
       setJob(data.job);
+      setJobId(data.job.id);
     } catch {
       setSubmitError("无法连接渲染服务，请确认服务仍在运行。");
     } finally {
@@ -297,7 +359,8 @@ export default function MergeWorkspace({ onNavigate, onOpenNav }: MergeWorkspace
       />
 
       <main className="page">
-        <div className="page-head">
+        {storageError ? <div className="alert error" role="alert">{storageError}</div> : null}
+        <AnimatedContent className="page-head" active={active}>
           <div>
             <h1 className="page-title">视频拼接</h1>
             <p className="page-sub">按顺序连接多支成片，配音与字幕随片段一起保留。</p>
@@ -309,7 +372,7 @@ export default function MergeWorkspace({ onNavigate, onOpenNav }: MergeWorkspace
               {outputSize.width}×{outputSize.height}
             </span>
           </div>
-        </div>
+        </AnimatedContent>
 
         <div className="split split-merge">
           <div className="merge-left">
@@ -498,16 +561,16 @@ export default function MergeWorkspace({ onNavigate, onOpenNav }: MergeWorkspace
 
                 {job?.status === "success" && job.videoUrl ? (
                   <div className="result">
-                    <video className="result-video" src={job.videoUrl} controls playsInline preload="metadata" />
-                    <div className="result-actions">
-                      <a className="btn btn-primary" href={job.downloadUrl ?? job.videoUrl} download={job.name ? `${job.name}.mp4` : job.fileName}>
+                    <ResultVideo key={job.id} src={job.videoUrl} title={job.name ?? "合并视频"}
+                      active={active && !zoomOpen && !playing} onExpandedChange={setResultOpen}>
+                      <DownloadVideo id={job.id} name={job.name ?? "合并视频"} className="btn btn-primary" href={job.downloadUrl ?? job.videoUrl}>
                         {icons.download}
                         下载合并视频
-                      </a>
+                      </DownloadVideo>
                       <button type="button" className="btn btn-ghost" onClick={() => onNavigate("library")}>
                         素材库
                       </button>
-                    </div>
+                    </ResultVideo>
                     <p className="result-note">
                       {job.name ?? "合并视频"} · {formatSize(job.fileSize ?? 0)} · output/{job.fileName}
                     </p>
@@ -536,7 +599,7 @@ export default function MergeWorkspace({ onNavigate, onOpenNav }: MergeWorkspace
 
               <div className="canvas">
                 {segments.length > 0 ? (
-                  <MergePreview segments={segments} ratio={effectiveRatio} backgroundColor={background} />
+                  <MergePreview active={active && !zoomOpen && !playing && !resultOpen} segments={segments} ratio={effectiveRatio} backgroundColor={background} onRequestFullscreen={openPreviewFullscreen} />
                 ) : (
                   <div className="empty-state inline">
                     <h2>拼接序列为空</h2>
@@ -649,16 +712,17 @@ export default function MergeWorkspace({ onNavigate, onOpenNav }: MergeWorkspace
 
       <VideoLightbox open={playing !== null} title={playing?.name ?? ""} onClose={() => setPlaying(null)}>
         {playing ? (
-          <video className="lightbox-video" src={playing.videoUrl} controls autoPlay playsInline preload="metadata" draggable={false} />
+          <video className="lightbox-video" src={playing.videoUrl} controls controlsList="nofullscreen nodownload" autoPlay playsInline preload="metadata" draggable={false} />
         ) : null}
       </VideoLightbox>
 
       <VideoLightbox
+        ref={zoomRef}
         open={zoomOpen}
         title={`拼接预览 · ${segments.length} 段 · ${formatClock(totalSeconds)}`}
         onClose={() => setZoomOpen(false)}
       >
-        <MergePreview segments={segments} ratio={effectiveRatio} backgroundColor={background} />
+        <MergePreview active={active && zoomOpen} segments={segments} ratio={effectiveRatio} backgroundColor={background} />
       </VideoLightbox>
 
       <Toast message={toast} onDone={() => setToast(null)} />

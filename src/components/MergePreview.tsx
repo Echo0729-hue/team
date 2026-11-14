@@ -1,22 +1,27 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Player } from "@remotion/player";
+import { Player, type PlayerRef } from "@remotion/player";
 import { MergeVideo } from "@/remotion/MergeVideo";
+import PreviewFullscreenButton from "./PreviewFullscreenButton";
 import type { MergeProps, MergeSegment } from "@/remotion/merge";
 import { VIDEO_CONFIG, getVideoSize, type RatioId } from "@/remotion/params";
 
 type MergePreviewProps = {
+  active?: boolean;
   segments: MergeSegment[];
   ratio: RatioId;
   backgroundColor: string;
+  onRequestFullscreen?: () => void;
 };
 
 /**
  * 拼接预览：与导出共用 <MergeVideo />、统一比例下的真实分辨率与 30fps，
  * 因此预览里看到的顺序、缩放和留白就是最终成片的效果。
  */
-export default function MergePreview({ segments, ratio, backgroundColor }: MergePreviewProps) {
+export default function MergePreview({ segments, ratio, backgroundColor, active = true, onRequestFullscreen }: MergePreviewProps) {
+  const playerRef = useRef<PlayerRef>(null);
+  useEffect(() => { if (!active) playerRef.current?.pause(); }, [active]);
   const composition = getVideoSize({ ratio });
   const durationInFrames = Math.max(
     1,
@@ -55,15 +60,14 @@ export default function MergePreview({ segments, ratio, backgroundColor }: Merge
     return () => observer.disconnect();
   }, [composition.width, composition.height]);
 
-  const key = `${ratio}-${durationInFrames}-${segments.map((segment) => segment.id).join("_")}-${
-    size ? `${size.width}x${size.height}` : "0"
-  }`;
+  const key = `${ratio}-${durationInFrames}-${segments.map((segment) => segment.id).join("_")}`;
 
   return (
     <div ref={holderRef} className="preview-holder">
       {size ? (
-        <div className="preview-frame" style={{ width: size.width, height: size.height }}>
+        <div className="preview-frame" style={{ width: size.width, height: size.height }} onDoubleClick={onRequestFullscreen}>
           <Player
+            ref={playerRef}
             key={key}
             component={MergeVideo}
             inputProps={inputProps}
@@ -78,8 +82,11 @@ export default function MergePreview({ segments, ratio, backgroundColor }: Merge
             loop
             noSuspense
             acknowledgeRemotionLicense
-            doubleClickToFullscreen
+            allowFullscreen={false}
+            doubleClickToFullscreen={false}
+            spaceKeyToPlayOrPause={active}
           />
+          {onRequestFullscreen ? <PreviewFullscreenButton onClick={onRequestFullscreen} /> : null}
         </div>
       ) : null}
     </div>

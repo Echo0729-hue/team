@@ -72,9 +72,19 @@ export const splitScriptIntoCues = (script: string): string[] => {
     }
   }
 
+  // A clause can itself exceed the limit when the author omitted punctuation.
+  const bounded = pieces.flatMap((piece) => {
+    const chars = Array.from(piece);
+    const chunks: string[] = [];
+    for (let index = 0; index < chars.length; index += TTS_CUE_MAX_CHARS) {
+      chunks.push(chars.slice(index, index + TTS_CUE_MAX_CHARS).join(""));
+    }
+    return chunks;
+  });
+
   // 合并过短的片段
   const cues: string[] = [];
-  for (const piece of pieces) {
+  for (const piece of bounded) {
     const last = cues[cues.length - 1];
     if (last && Array.from(last).length < MIN_CUE_CHARS) {
       const merged = `${last}，${piece}`;

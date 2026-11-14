@@ -2,6 +2,9 @@
 import fs from "node:fs";
 
 const BASE = "http://localhost:3000";
+const contentA = { title: "配音同步", lines: ["先讲结构。", "字幕跟随配音。", "时长跟随讲解。"] };
+const contentShort = { title: "短配音", lines: ["一。", "二。", "三。"] };
+const contentLong = { title: "超长配音", lines: ["先确定观众。", "再整理知识点。", "最后检查导出。"] };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const check = (label, ok, detail = "") => {
@@ -33,18 +36,17 @@ const poll = async (id, label) => {
   throw new Error(`${label} 超时`);
 };
 
-const synth = async (script, speed = 1, voiceId = "local:Microsoft Huihui Desktop") => {
-  const { status, data } = await post("/api/tts", { script, voiceId, speed });
+const synth = async (script, speed = 1, content = contentA, voiceId = "local:Microsoft Huihui Desktop") => {
+  const { status, data } = await post("/api/tts", { script, voiceId, speed, content });
   if (status !== 200 || !data?.tts) {
     throw new Error(`配音失败 ${status} ${data?.message ?? ""}`);
   }
   return data.tts;
 };
 
-const render = async ({ script, tts, speed, ratio, template, title, durationMode, subtitle }) => {
+const render = async ({ script, tts, speed, ratio, template, content, durationMode, subtitle }) => {
   const { status, data } = await post("/api/render", {
-    title,
-    lines: [`第一段：${title}。`, "第二段：配音与字幕同步。", "第三段：时长跟随讲解。"],
+    ...content,
     backgroundColor: "#0B1120",
     accentColor: "#38BDF8",
     template,
@@ -82,12 +84,12 @@ const render = async ({ script, tts, speed, ratio, template, title, durationMode
   if (status !== 202) {
     return { status, data };
   }
-  const job = await poll(data.job.id, title);
+  const job = await poll(data.job.id, content.title);
   return { status, job };
 };
 
 // 1) 中等长度讲稿（约 9 秒）
-const scriptA = "大家好，这是第一段讲解。知识视频最重要的是把结构讲清楚。字幕会跟着这句话逐句出现。";
+const scriptA = "配音同步。\n先把结构讲清楚。\n字幕会跟着配音出现。\n时长跟随讲解。";
 const ttsA = await synth(scriptA, 1);
 check("中文讲稿生成配音", ttsA.durationSeconds > 5 && ttsA.durationSeconds < 15, `${ttsA.durationSeconds}s / ${ttsA.cues.length} 句`);
 check("字幕按句生成且不按字数均分", ttsA.cues.length >= 3 && ttsA.cues.every((cue) => cue.endFrame > cue.startFrame), ttsA.cues.map((c) => `${c.startFrame}-${c.endFrame}`).join(" "));
@@ -111,19 +113,19 @@ const outA = await render({
   speed: 1,
   ratio: "9:16",
   template: "tech",
-  title: "配音同步 竖屏",
+  content: contentA,
   durationMode: "voice",
 });
 check("带配音视频导出成功", outA.status === 202 && outA.job?.status === "success", outA.data?.message ?? outA.job?.error ?? "");
 if (outA.job?.status === "success") {
-  const expected = Math.ceil((ttsA.durationSeconds + 0.35) * 2) / 2;
+  const expected = Math.min(15, Math.max(5, Math.ceil((ttsA.durationSeconds + 0.35) * 2) / 2));
   const actual = outA.job.totalFrames / 30;
   check("视频时长跟随配音（向上取 0.5 秒，不截断）", Math.abs(actual - expected) < 0.001, `${actual}s / 期望 ${expected}s`);
 }
 
 // 4) 短讲稿（<5 秒）仍按 5 秒
-const scriptShort = "先讲结论。";
-const ttsShort = await synth(scriptShort, 1);
+const scriptShort = "好。\n一。\n二。\n三。";
+const ttsShort = await synth(scriptShort, 1, contentShort);
 check("短讲稿音频不足 5 秒", ttsShort.durationSeconds < 5, `${ttsShort.durationSeconds}s`);
 const outShort = await render({
   script: scriptShort,
@@ -131,18 +133,18 @@ const outShort = await render({
   speed: 1,
   ratio: "16:9",
   template: "editorial",
-  title: "短配音 横屏",
+  content: contentShort,
   durationMode: "voice",
 });
 check("音频不足 5 秒时视频保持 5 秒", outShort.job?.status === "success" && outShort.job.totalFrames === 150, `${outShort.job?.totalFrames} 帧`);
 
 // 5) 超长讲稿：应提示拆镜头
 const scriptLong =
-  "第一，先确定观众是谁，再决定讲什么。第二，把每个知识点拆成一句话，避免信息过载。" +
-  "第三，用例子解释抽象概念，让听众有画面感。第四，控制每分钟的字数，留出停顿。" +
-  "第五，字幕要跟声音同步，每屏不超过两行。第六，最后复盘结构，删掉重复的表达。" +
+  "第一，先确定观众是谁，再决定讲什么。第二，把每个知识点拆成一句话，避免信息过载。\n" +
+  "第三，用例子解释抽象概念，让听众有画面感。第四，控制每分钟的字数，留出停顿。\n" +
+  "第五，字幕要跟声音同步，每屏不超过两行。第六，最后复盘结构，删掉重复的表达。\n" +
   "第七，导出前再听一遍，确认没有截断和爆音。";
-const ttsLong = await synth(scriptLong, 1);
+const ttsLong = await synth(scriptLong, 1, contentLong);
 check("长讲稿音频超过 15 秒", ttsLong.durationSeconds > 15, `${ttsLong.durationSeconds}s`);
 const outLong = await render({
   script: scriptLong,
@@ -150,7 +152,7 @@ const outLong = await render({
   speed: 1,
   ratio: "9:16",
   template: "cards",
-  title: "超长配音",
+  content: contentLong,
   durationMode: "voice",
 });
 check(
@@ -166,7 +168,7 @@ const outB = await render({
   speed: 1.25,
   ratio: "9:16",
   template: "split",
-  title: "配音同步 第二支",
+  content: contentA,
   durationMode: "voice",
 });
 check("第二支带配音视频导出成功", outB.job?.status === "success", outB.job?.error ?? "");

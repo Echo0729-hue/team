@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { NextResponse } from "next/server";
-import { deleteJob } from "@/lib/jobs";
+import { deleteJob, isVideoInUse } from "@/lib/jobs";
 import {
   getLibraryItem,
   removeLibraryItem,
@@ -58,6 +58,10 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
 export async function DELETE(_request: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
 
+  if (isVideoInUse(id)) {
+    return NextResponse.json({ message: "该视频正用于排队或渲染中的拼接任务，请等待任务结束后再删除。" }, { status: 409 });
+  }
+
   const item = getLibraryItem(id);
   if (!item) {
     return NextResponse.json({ message: "素材不存在或文件已被删除。" }, { status: 404 });
@@ -75,7 +79,7 @@ export async function DELETE(_request: Request, context: { params: Promise<{ id:
 
   try {
     if (fs.existsSync(filePath)) {
-      await fs.promises.unlink(filePath);
+      fs.unlinkSync(filePath);
     }
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getTtsRecord } from "@/lib/tts";
 import { cuesToSrt } from "@/remotion/subtitles";
 import { VIDEO_CONFIG } from "@/remotion/params";
+import { toDownloadFileName } from "@/lib/videoName";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -21,7 +22,7 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
     endFrame: cue.endFrame,
   }));
   const srt = cuesToSrt(cues, VIDEO_CONFIG.fps);
-  const fileName = `${record.script.slice(0, 12) || "字幕"}.srt`;
+  const fileName = toDownloadFileName(Array.from(record.script).slice(0, 12).join(""), ".srt");
 
   return new Response(srt, {
     status: 200,

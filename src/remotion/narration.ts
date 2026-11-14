@@ -5,6 +5,29 @@
 
 export type TtsProviderId = "local" | "openai" | "azure";
 
+export const NARRATION_SCENE_IDS = ["title", "line0", "line1", "line2"] as const;
+export type NarrationSceneId = (typeof NARRATION_SCENE_IDS)[number];
+export type NarrationScene = {
+  id: NarrationSceneId;
+  text: string;
+  startFrame: number;
+  endFrame: number;
+};
+export type NarrationContent = { title: string; lines: string[] };
+
+export const normalizeScript = (script: string): string => script.replace(/\r\n?/g, "\n").trim();
+
+/** Four explicit paragraphs map narration to the title and three content scenes. */
+export const parseNarrationScenes = (script: string): string[] | null => {
+  const parts = normalizeScript(script).split(/\n+/).map((part) => part.trim()).filter(Boolean);
+  return parts.length === NARRATION_SCENE_IDS.length && parts.every((part) => /[\p{L}\p{N}]/u.test(part))
+    ? parts
+    : null;
+};
+
+export const narrationContentKey = (content: NarrationContent): string =>
+  JSON.stringify([content.title.trim(), ...[0, 1, 2].map((index) => (content.lines[index] ?? "").trim())]);
+
 export type NarrationProps = {
   enabled: boolean;
   /** 配音记录 id（output/tts/<id>.json） */
@@ -21,6 +44,8 @@ export type NarrationProps = {
   volume: number;
   /** 语音服务测得的音频总时长（秒） */
   audioDurationSeconds: number;
+  /** Scene boundaries measured from the same audio as the subtitle cues. */
+  scenes?: NarrationScene[];
 };
 
 export const NARRATION_LIMITS = {
@@ -115,8 +140,8 @@ export const sanitizeNarration = (raw: unknown, fps: number, fallbackScript: str
 
   const script =
     typeof source.script === "string" && source.script.trim().length > 0
-      ? source.script.trim().slice(0, NARRATION_LIMITS.scriptMaxLength)
-      : fallbackScript.slice(0, NARRATION_LIMITS.scriptMaxLength);
+      ? Array.from(source.script.trim()).slice(0, NARRATION_LIMITS.scriptMaxLength).join("")
+      : Array.from(fallbackScript).slice(0, NARRATION_LIMITS.scriptMaxLength).join("");
 
   const speed =
     typeof source.speed === "number" && Number.isFinite(source.speed) ? clampSpeed(source.speed) : 1;
@@ -142,14 +167,30 @@ export const sanitizeNarration = (raw: unknown, fps: number, fallbackScript: str
     speed,
     volume,
     audioDurationSeconds,
+    scenes: sanitizeNarrationScenes(source.scenes),
   };
 };
 
 /** 由文案拼出默认讲解稿（每段换行，方便朗读与断句） */
 export const buildScriptFromLines = (title: string, lines: string[]): string => {
   const strip = (value: string) => value.replace(/[，,、；;：:。.!！?？\s]+$/u, "").trim();
-  const parts = [title, ...lines].map(strip).filter((part) => part.length > 0);
-  return `${parts.join("。")}。`.slice(0, NARRATION_LIMITS.scriptMaxLength);
+  return [title, ...lines.slice(0, 3)].map((part) => `${strip(part)}。`).join("\n");
+};
+
+export const sanitizeNarrationScenes = (raw: unknown): NarrationScene[] => {
+  if (!Array.isArray(raw) || raw.length !== 4) return [];
+  const scenes: NarrationScene[] = [];
+  for (const [index, entry] of raw.entries()) {
+    if (typeof entry !== "object" || entry === null) return [];
+    const item = entry as Record<string, unknown>;
+    if (item.id !== NARRATION_SCENE_IDS[index] || typeof item.text !== "string" ||
+      typeof item.startFrame !== "number" || !Number.isInteger(item.startFrame) ||
+      typeof item.endFrame !== "number" || !Number.isInteger(item.endFrame) ||
+      item.startFrame < 0 || item.endFrame <= item.startFrame ||
+      (index === 0 ? item.startFrame !== 0 : item.startFrame < scenes[index - 1].endFrame)) return [];
+    scenes.push({ id: NARRATION_SCENE_IDS[index], text: item.text, startFrame: item.startFrame, endFrame: item.endFrame });
+  }
+  return scenes;
 };
 
 export const narrationFpsGuard = (fps: number): number => (Number.isFinite(fps) && fps > 0 ? fps : 30);

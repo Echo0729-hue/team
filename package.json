@@ -8,21 +8,36 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "render:sample": "node scripts/render-sample.ts"
+    "test": "tsx --test src/lib/*.test.ts",
+    "verify:correctness": "node scripts/verify-correctness.mjs",
+    "verify:site": "node scripts/verify-site.mjs",
+    "verify:fullscreen": "node scripts/verify-fullscreen.mjs",
+    "verify:react-bits": "node scripts/verify-react-bits.mjs",
+    "verify:playback-download": "node scripts/verify-playback-download.mjs",
+    "verify:effects": "tsx scripts/verify-effects.mts",
+    "setup:manim": "node scripts/setup-manim.mjs",
+    "verify:manim": "tsx scripts/verify-manim.mts",
+    "render:sample": "tsx scripts/render-sample.ts"
   },
   "dependencies": {
     "@remotion/bundler": "4.0.541",
     "@remotion/player": "4.0.541",
     "@remotion/renderer": "4.0.541",
+    "katex": "^0.19.1",
     "next": "16.4.5",
     "react": "19.3.1",
     "react-dom": "19.3.1",
-    "remotion": "4.0.541"
+    "remotion": "4.0.541",
+    "three": "^0.187.0"
   },
   "devDependencies": {
+    "@types/katex": "^0.16.8",
     "@types/node": "24.10.1",
     "@types/react": "19.2.7",
     "@types/react-dom": "19.2.3",
+    "@types/three": "^0.187.0",
+    "playwright": "^1.65.0",
+    "tsx": "^4.23.15",
     "typescript": "5.9.3"
   }
 }

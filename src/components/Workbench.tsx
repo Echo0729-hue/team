@@ -22,6 +22,13 @@ export default function Workbench() {
   const [navOpen, setNavOpen] = useState(false);
 
   useEffect(() => {
+    const desktop = window.matchMedia("(min-width: 1081px)");
+    const closeOnDesktop = () => { if (desktop.matches) setNavOpen(false); };
+    desktop.addEventListener("change", closeOnDesktop);
+    return () => desktop.removeEventListener("change", closeOnDesktop);
+  }, []);
+
+  useEffect(() => {
     const hash = window.location.hash.replace("#", "");
     let next: WorkbenchView | null = isView(hash) ? hash : null;
     if (!next) {
@@ -37,6 +44,20 @@ export default function Workbench() {
     if (next) {
       setView(next);
     }
+    window.history.replaceState(null, "", `#${next ?? "generate"}`);
+    const syncLocation = () => {
+      const hash = window.location.hash.slice(1);
+      const view = isView(hash) ? hash : "generate";
+      setView(view);
+      setNavOpen(false);
+      try { window.localStorage.setItem(STORAGE_KEY, view); } catch {}
+    };
+    window.addEventListener("hashchange", syncLocation);
+    window.addEventListener("popstate", syncLocation);
+    return () => {
+      window.removeEventListener("hashchange", syncLocation);
+      window.removeEventListener("popstate", syncLocation);
+    };
   }, []);
 
   const navigate = useCallback((next: WorkbenchView) => {
@@ -48,7 +69,7 @@ export default function Workbench() {
       // 忽略写入失败
     }
     if (window.location.hash !== `#${next}`) {
-      window.history.replaceState(null, "", `#${next}`);
+      window.history.pushState(null, "", `#${next}`);
     }
   }, []);
 
@@ -56,14 +77,16 @@ export default function Workbench() {
     <div className="app">
       <AppSidebar view={view} onNavigate={navigate} open={navOpen} onClose={() => setNavOpen(false)} />
 
-      <div className="app-main">
-        {view === "merge" ? (
-          <MergeWorkspace onNavigate={navigate} onOpenNav={() => setNavOpen(true)} />
-        ) : view === "library" ? (
+      <div className="app-main" inert={navOpen}>
+        <div hidden={view !== "generate"}>
+          <GeneratorClient active={view === "generate"} onNavigate={navigate} onOpenNav={() => setNavOpen(true)} />
+        </div>
+        <div hidden={view !== "merge"}>
+          <MergeWorkspace active={view === "merge"} onNavigate={navigate} onOpenNav={() => setNavOpen(true)} />
+        </div>
+        {view === "library" ? (
           <LibraryPage onNavigate={navigate} onOpenNav={() => setNavOpen(true)} />
-        ) : (
-          <GeneratorClient onNavigate={navigate} onOpenNav={() => setNavOpen(true)} />
-        )}
+        ) : null}
       </div>
     </div>
   );

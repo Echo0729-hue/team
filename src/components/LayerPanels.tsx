@@ -4,6 +4,7 @@ import { useCallback, useRef, useState } from "react";
 import {
   LAYER_FONTS,
   LAYER_LIMITS,
+  imageHeightForWidth,
   type ImageFit,
   type ImageLayer,
   type Layer,
@@ -34,6 +35,7 @@ type AssetsPanelProps = {
   uploadError: string | null;
   onUpload: (files: FileList | File[]) => void;
   onAddImage: (upload: UploadItem) => void;
+  onDeleteUpload: (upload: UploadItem) => void;
   onAddText: () => void;
   onSelect: (id: string | null) => void;
   onToggleHidden: (id: string) => void;
@@ -50,6 +52,7 @@ export function LayerAssetsPanel({
   uploadError,
   onUpload,
   onAddImage,
+  onDeleteUpload,
   onAddText,
   onSelect,
   onToggleHidden,
@@ -135,6 +138,9 @@ export function LayerAssetsPanel({
                 </figcaption>
                 <button type="button" className="btn btn-ghost btn-sm" onClick={() => onAddImage(upload)}>
                   添加到画面
+                </button>
+                <button type="button" className="btn-text" onClick={() => onDeleteUpload(upload)} aria-label={`删除图片 ${upload.name}`}>
+                  删除图片
                 </button>
               </figure>
             ))}
@@ -252,6 +258,7 @@ export function LayerAssetsPanel({
 /* ------------------------------ 右侧：图层属性 ------------------------------ */
 
 type InspectorProps = {
+  canvas: { width: number; height: number };
   layer: Layer | null;
   durationSeconds: number;
   onChange: (patch: Partial<TextLayer> & Partial<ImageLayer>) => void;
@@ -296,7 +303,7 @@ const NumberField = ({
   </label>
 );
 
-export function LayerInspector({ layer, durationSeconds, onChange }: InspectorProps) {
+export function LayerInspector({ layer, durationSeconds, onChange, canvas }: InspectorProps) {
   if (!layer) {
     return (
       <div className="editor-panel">
@@ -332,6 +339,7 @@ export function LayerInspector({ layer, durationSeconds, onChange }: InspectorPr
               </label>
               <textarea
                 id="layer-text"
+                maxLength={LAYER_LIMITS.textMaxLength}
                 className="textarea"
                 rows={4}
                 value={(layer as TextLayer).text}
@@ -576,7 +584,7 @@ export function LayerInspector({ layer, durationSeconds, onChange }: InspectorPr
                         onChange({
                           fit,
                           width: 0.6,
-                          height: Math.round(((0.6 * 1080) / image.aspect / 1920) * 10000) / 10000,
+                          height: imageHeightForWidth(0.6, image.aspect, canvas),
                         });
                       }
                     }}
@@ -616,7 +624,7 @@ export function LayerInspector({ layer, durationSeconds, onChange }: InspectorPr
                     const image = layer as ImageLayer;
                     onChange({
                       width: value / 100,
-                      height: Math.round((((value / 100) * 1080) / image.aspect / 1920) * 10000) / 10000,
+                      height: imageHeightForWidth(value / 100, image.aspect, canvas),
                     });
                   }}
                 />

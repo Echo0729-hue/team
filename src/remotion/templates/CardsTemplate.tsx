@@ -16,12 +16,13 @@ export const CardsTemplate: React.FC<VideoProps> = ({
   lines,
   backgroundColor,
   accentColor,
+  narration,
 }) => {
   const frame = useCurrentFrame();
   const { fps, durationInFrames, unit, pad, gap, portrait, width } = useLayout();
   const palette = paletteFor(backgroundColor);
   const safeLines = linesOf(lines);
-  const tl = getTimeline(durationInFrames);
+  const tl = getTimeline(durationInFrames, narration);
 
   const specs = analyzeLines({ title, lines: safeLines });
   const active = getActiveIndex(frame, tl);
@@ -30,7 +31,7 @@ export const CardsTemplate: React.FC<VideoProps> = ({
   const visualW = portrait ? Math.min(width * 0.5, 480) : Math.min(width * 0.24, 380);
   const visualH = visualW * 0.625;
 
-  const outro = interpolate(frame, [tl.outroStart, tl.total - 1], [1, 0], CLAMP);
+  const outro = interpolate(frame, [tl.outroStart, Math.max(tl.outroStart + 1, tl.total - 1)], [1, 0], CLAMP);
   const titleIn = spring({
     frame,
     fps,

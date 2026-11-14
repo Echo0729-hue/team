@@ -3,15 +3,20 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Player, type PlayerRef } from "@remotion/player";
 import { TextPromoVideo } from "@/remotion/VideoTemplate";
+import PreviewFullscreenButton from "./PreviewFullscreenButton";
 import { VIDEO_CONFIG, getDurationInFrames, getVideoSize, type VideoProps } from "@/remotion/params";
 
 type PreviewPlayerProps = {
   inputProps: VideoProps;
   /** 编辑模式：不自动播放、点击不播放，方便在画面上拖动图层 */
   editing?: boolean;
+  active?: boolean;
   /** 叠加在画面之上的编辑层 */
   overlay?: ReactNode;
   onPlayingChange?: (playing: boolean) => void;
+  onRequestFullscreen?: () => void;
+  seekFrame?: number;
+  onFrameChange?: (frame: number) => void;
 };
 
 /**
@@ -22,8 +27,12 @@ type PreviewPlayerProps = {
 export default function PreviewPlayer({
   inputProps,
   editing = false,
+  active = true,
   overlay,
   onPlayingChange,
+  onRequestFullscreen,
+  seekFrame,
+  onFrameChange,
 }: PreviewPlayerProps) {
   const playerInputProps = useMemo(() => inputProps, [inputProps]);
   const { width: compositionWidth, height: compositionHeight } = getVideoSize(inputProps);
@@ -31,6 +40,26 @@ export default function PreviewPlayer({
   const holderRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<PlayerRef>(null);
   const [size, setSize] = useState<{ width: number; height: number } | null>(null);
+  const frameCallback = useRef(onFrameChange);
+  frameCallback.current = onFrameChange;
+
+  useEffect(() => {
+    if (seekFrame === undefined) return;
+    playerRef.current?.pause();
+    playerRef.current?.seekTo(Math.max(0, Math.min(durationInFrames - 1, seekFrame)));
+  }, [seekFrame, durationInFrames, Boolean(size)]);
+
+  useEffect(() => {
+    const player = playerRef.current;
+    if (!player) return;
+    const onFrame = (event: { detail: { frame: number } }) => frameCallback.current?.(event.detail.frame);
+    player.addEventListener("frameupdate", onFrame);
+    return () => player.removeEventListener("frameupdate", onFrame);
+  }, [Boolean(size), inputProps.template, inputProps.ratio, durationInFrames, inputProps.narration?.ttsId]);
+
+  useEffect(() => {
+    if (!active) playerRef.current?.pause();
+  }, [active]);
 
   useEffect(() => {
     const element = holderRef.current;
@@ -70,10 +99,11 @@ export default function PreviewPlayer({
   return (
     <div ref={holderRef} className="preview-holder">
       {size ? (
-        <div className="preview-frame" style={{ width: size.width, height: size.height }}>
+        <div className="preview-frame" style={{ width: size.width, height: size.height }}
+          onDoubleClick={!editing ? onRequestFullscreen : undefined}>
           <Player
             ref={playerRef}
-            key={`${inputProps.template}-${inputProps.ratio}-${durationInFrames}-${size.width}x${size.height}-${inputProps.narration?.ttsId ?? "silent"}`}
+            key={`${inputProps.template}-${inputProps.ratio}-${durationInFrames}-${inputProps.narration?.ttsId ?? "silent"}`}
             component={TextPromoVideo}
             inputProps={playerInputProps}
             durationInFrames={durationInFrames}
@@ -85,15 +115,17 @@ export default function PreviewPlayer({
             initiallyShowControls
             alwaysShowControls
             loop={!editing}
-            autoPlay={!editing}
+            autoPlay={!editing && active}
             initialFrame={editing ? 0 : 24}
             clickToPlay={!editing}
-            doubleClickToFullscreen={!editing}
-            spaceKeyToPlayOrPause
+            allowFullscreen={false}
+            doubleClickToFullscreen={false}
+            spaceKeyToPlayOrPause={active}
             noSuspense
             acknowledgeRemotionLicense
           />
           {overlay ? <div className="preview-overlay">{overlay}</div> : null}
+          {onRequestFullscreen ? <PreviewFullscreenButton onClick={onRequestFullscreen} /> : null}
         </div>
       ) : null}
     </div>

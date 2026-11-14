@@ -9,12 +9,15 @@ import { addLibraryItem, getLibraryItem } from "./library";
 import { getTtsRecord } from "./tts";
 import { resolveUploadPath } from "./uploads";
 import { recalculateQueuePositions, updateJob, type RenderJob } from "./jobs";
+import { prepareNarratedVideo } from "./narrationValidation";
+import { resolveInside } from "./filePaths";
+import { prepareManimAssets } from "./manim";
 
 /** 导出文件写入项目根目录下的 output/ */
 export const OUTPUT_DIR = path.join(process.cwd(), "output");
 export const BUNDLE_ENTRY_POINT = path.join(process.cwd(), "src", "remotion", "index.ts");
 
-export const getOutputPath = (fileName: string): string => path.join(OUTPUT_DIR, fileName);
+export const getOutputPath = (fileName: string): string => resolveInside(OUTPUT_DIR, fileName);
 
 const BROWSER_CANDIDATES = [
   process.env.REMOTION_BROWSER_EXECUTABLE,
@@ -77,10 +80,11 @@ const withRenderableNarration = (job: RenderJob, serveUrl: string): VideoProps =
   if (!record) {
     throw new Error("配音文件不存在，请重新生成配音后再导出。");
   }
+  const prepared = prepareNarratedVideo(job.props, record);
   return {
-    ...job.props,
+    ...prepared,
     narration: {
-      ...narration,
+      ...prepared.narration,
       audioSrc: `${serveUrl}/tts/${encodeURIComponent(record.fileName)}`,
       audioDurationSeconds: record.durationSeconds,
     },
@@ -98,7 +102,7 @@ const withRenderableLayers = (props: VideoProps, serveUrl: string): VideoProps =
   }
 
   const rewritten = layers.map((layer) => {
-    if (layer.kind !== "image") {
+    if (layer.kind !== "image" || layer.hidden) {
       return layer;
     }
     const fileName = layer.src.split("/").pop() ?? "";
@@ -162,7 +166,7 @@ const runJob = async (job: RenderJob): Promise<void> => {
     const isMerge = job.kind === "merge";
     const inputProps = isMerge
       ? buildMergeProps(job, serveUrl)
-      : withRenderableLayers(withRenderableNarration(job, serveUrl), serveUrl);
+      : { ...withRenderableLayers(withRenderableNarration(job, serveUrl), serveUrl), manimAssets: await prepareManimAssets(job.props.effects ?? [], serveUrl) };
     const compositionId = isMerge ? MERGE_COMPOSITION_ID : VIDEO_CONFIG.compositionId;
 
     const composition = await selectComposition({
@@ -235,8 +239,8 @@ const runJob = async (job: RenderJob): Promise<void> => {
       template: job.props.template,
       ratio: (isMerge ? (job.merge?.ratio as RatioId) : job.props.ratio) ?? job.props.ratio,
       kind: isMerge ? "merge" : "single",
-      hasNarration: !isMerge && job.props.narration.enabled,
-      hasSubtitles: job.props.subtitles.enabled && job.props.subtitles.cues.length > 0,
+      hasNarration: isMerge ? (job.merge?.segmentIds.some((id) => getLibraryItem(id)?.hasNarration) ?? false) : job.props.narration.enabled,
+      hasSubtitles: isMerge ? (job.merge?.segmentIds.some((id) => getLibraryItem(id)?.hasSubtitles) ?? false) : job.props.subtitles.enabled && job.props.subtitles.cues.length > 0,
       segmentCount,
       fileSize,
       createdAt: new Date().toISOString(),

@@ -142,7 +142,7 @@ export const createImageLayer = (
   const aspect = upload.height > 0 ? upload.width / upload.height : 1;
   const width = 0.5;
   // 宽度按画布宽归一化，高度换算到画布高
-  const height = round((width * (canvas.width / canvas.height)) / aspect, 4);
+  const height = imageHeightForWidth(width, aspect, canvas);
   return {
     id: createLayerId(),
     name: upload.name || "图片",
@@ -163,6 +163,9 @@ export const createImageLayer = (
     ...options,
   };
 };
+
+export const imageHeightForWidth = (width: number, aspect: number, canvas: { width: number; height: number }): number =>
+  round((width * canvas.width) / aspect / canvas.height, 4);
 
 export const isTextLayer = (layer: Layer): layer is TextLayer => layer.kind === "text";
 export const isImageLayer = (layer: Layer): layer is ImageLayer => layer.kind === "image";
@@ -192,7 +195,8 @@ export const sanitizeLayers = (raw: unknown, totalFrames: number): Layer[] => {
     }
 
     const id = typeof item.id === "string" && item.id.length > 0 ? item.id.slice(0, 64) : createLayerId();
-    const startFrame = clamp(Math.round(readNumber(item.startFrame, 0)), 0, totalFrames);
+    if (layers.some((layer) => layer.id === id)) continue;
+    const startFrame = clamp(Math.round(readNumber(item.startFrame, 0)), 0, Math.max(0, totalFrames - 1));
     const endFrame = clamp(Math.round(readNumber(item.endFrame, totalFrames)), startFrame + 1, totalFrames);
     const base = {
       id,
@@ -218,7 +222,7 @@ export const sanitizeLayers = (raw: unknown, totalFrames: number): Layer[] => {
       layers.push({
         ...base,
         kind: "text",
-        text: typeof item.text === "string" ? item.text.slice(0, LAYER_LIMITS.textMaxLength) : "",
+        text: typeof item.text === "string" ? Array.from(item.text).slice(0, LAYER_LIMITS.textMaxLength).join("") : "",
         fontId,
         fontSize: Math.round(clamp(readNumber(item.fontSize, 64), LAYER_LIMITS.fontSizeMin, LAYER_LIMITS.fontSizeMax)),
         fontWeight: item.fontWeight === 400 ? 400 : 700,
@@ -247,7 +251,7 @@ export const sanitizeLayers = (raw: unknown, totalFrames: number): Layer[] => {
     }
     // 只接受 <uuid>.<ext> 形式的文件名，避免 .. 之类的路径穿越
     const fileName = rawSrc.slice(LAYER_IMAGE_PREFIX.length);
-    if (!/[A-Za-z0-9-]+\.(png|jpg|jpeg|webp)$/i.test(fileName)) {
+    if (!/^[A-Za-z0-9-]+\.(png|jpg|jpeg|webp)$/i.test(fileName)) {
       continue;
     }
     const src = `${LAYER_IMAGE_PREFIX}${fileName}`;

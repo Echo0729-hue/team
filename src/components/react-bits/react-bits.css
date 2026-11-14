@@ -1,0 +1,40 @@
+/* Scoped adaptation of React Bits for the existing light workspace. */
+.rb-spotlight {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  -webkit-tap-highlight-color: rgba(15, 118, 110, 0.12);
+}
+
+.rb-spotlight-light {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(
+    circle var(--rb-spotlight-size, 240px) at var(--rb-spotlight-x, 50%) var(--rb-spotlight-y, 50%),
+    var(--rb-spotlight-color, rgba(15, 118, 110, 0.12)),
+    transparent 100%
+  );
+  transition: opacity 160ms ease-out;
+}
+
+.rb-spotlight[data-spotlight-active="true"] > .rb-spotlight-light {
+  opacity: 1;
+}
+
+.rb-spotlight:focus-visible,
+.rb-spotlight:has(:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+/* Touch/keyboard retain ordinary focus and selection instead of a following light. */
+@media (prefers-reduced-motion: reduce), (hover: none) {
+  .rb-spotlight-light {
+    display: none;
+    transition: none;
+  }
+}

@@ -1,15 +1,23 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import PreviewPlayer from "./PreviewPlayer";
 import SiteHeader from "./SiteHeader";
 import Toast from "./Toast";
 import TemplateThumb from "./TemplateThumb";
-import VideoLightbox from "./VideoLightbox";
+import VideoLightbox, { type VideoLightboxHandle } from "./VideoLightbox";
+import ResultVideo from "./ResultVideo";
+import DownloadVideo from "./DownloadVideo";
+import SpotlightCard from "./react-bits/SpotlightCard";
+import AnimatedContent from "./react-bits/AnimatedContent";
 import LayerOverlay from "./LayerOverlay";
+import EffectWorkspace from "./EffectWorkspace";
+import { useManimAssets } from "./useManimAssets";
+import { useDraftField, useEditorDraft } from "./useEditorDraft";
 import { LayerAssetsPanel, LayerInspector, type UploadItem } from "./LayerPanels";
 import type { PublicJob } from "@/lib/jobs";
-import type { TtsCue, VoiceOption } from "@/lib/tts/types";
+import type { TtsResult, VoiceOption } from "@/lib/tts/types";
 import type { TtsConfig } from "@/lib/tts/types";
 import {
   DEFAULT_VIDEO_PROPS,
@@ -23,7 +31,6 @@ import {
   countCharacters,
   getDurationInFrames,
   getVideoSize,
-  toFormValues,
   toPreviewProps,
   validateFormValues,
   type RatioId,
@@ -32,41 +39,37 @@ import {
   type VideoFormValues,
   type VideoProps,
 } from "@/remotion/params";
+import { sanitizeEffects } from "@/remotion/effects";
 import {
   NARRATION_LIMITS,
   buildScriptFromLines,
   describeDurationFit,
   resolveDurationFromAudio,
+  narrationContentKey,
+  normalizeScript,
+  parseNarrationScenes,
+  sanitizeNarrationScenes,
   type DurationMode,
 } from "@/remotion/narration";
-import { SUBTITLE_LIMITS, wrapSubtitleText, type SubtitlePosition } from "@/remotion/subtitles";
-import { VIDEO_NAME_MAX_LENGTH, sanitizeVideoName } from "@/lib/videoName";
+import { SUBTITLE_LIMITS, cuesToSrt, wrapSubtitleText, type SubtitlePosition } from "@/remotion/subtitles";
+import { VIDEO_NAME_MAX_LENGTH, sanitizeVideoName, toDownloadFileName } from "@/lib/videoName";
 import {
   createImageLayer,
   createTextLayer,
+  LAYER_LIMITS,
+  sanitizeLayers,
   type ImageLayer,
   type Layer,
   type TextLayer,
 } from "@/remotion/layers";
 import type { WorkbenchView } from "./Workbench";
 
-type TabId = "content" | "visual" | "layers" | "voice" | "subtitle";
+type TabId = "content" | "visual" | "layers" | "effects" | "voice" | "subtitle";
 
-type TtsResult = {
-  id: string;
-  audioUrl: string;
-  srtUrl: string;
-  durationSeconds: number;
-  voiceId: string;
-  voiceName: string;
-  provider: string;
-  speed: number;
-  script: string;
-  cues: TtsCue[];
-  chunkCount: number;
-};
+
 
 type GeneratorClientProps = {
+  active: boolean;
   onNavigate: (view: WorkbenchView) => void;
   onOpenNav: () => void;
 };
@@ -79,6 +82,7 @@ const TABS: { id: TabId; label: string; hint: string }[] = [
   { id: "content", label: "内容", hint: "标题、文案与名称" },
   { id: "visual", label: "画面", hint: "模板、比例、时长" },
   { id: "layers", label: "图层", hint: "图片与文字排版" },
+  { id: "effects", label: "效果", hint: "五类效果组件与时间轴" },
   { id: "voice", label: "配音", hint: "讲稿、音色、试听" },
   { id: "subtitle", label: "字幕", hint: "样式、断句、SRT" },
 ];
@@ -132,64 +136,84 @@ const icons = {
   ),
 };
 
-export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClientProps) {
-  const [tab, setTab] = useState<TabId>("content");
-  const [values, setValues] = useState<VideoFormValues>(() => toFormValues(DEFAULT_VIDEO_PROPS));
+export default function GeneratorClient({ active, onNavigate, onOpenNav }: GeneratorClientProps) {
+  const { draft, setDraft, ready: draftReady, storageMessage, restoredTtsId } = useEditorDraft();
+  const [tab, setTab] = useDraftField(draft, setDraft, "tab");
+  const [values, setValues] = useDraftField(draft, setDraft, "values");
   const [errors, setErrors] = useState<VideoFieldErrors>({});
   const [job, setJob] = useState<PublicJob | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [pollError, setPollError] = useState<string | null>(null);
-  const [submittedProps, setSubmittedProps] = useState<VideoProps | null>(null);
+  const [jobId, setJobId] = useDraftField(draft, setDraft, "jobId");
+  const [, setTtsId] = useDraftField(draft, setDraft, "ttsId");
+  const [restoringTts, setRestoringTts] = useState(false);
   const [durationInput, setDurationInput] = useState(String(DEFAULT_VIDEO_PROPS.durationInSeconds));
-  const [videoName, setVideoName] = useState(DEFAULT_VIDEO_PROPS.title);
-  const [nameTouched, setNameTouched] = useState(false);
+  const [videoName, setVideoName] = useDraftField(draft, setDraft, "videoName");
+  const [nameTouched, setNameTouched] = useDraftField(draft, setDraft, "nameTouched");
   const [zoomOpen, setZoomOpen] = useState(false);
+  const zoomRef = useRef<VideoLightboxHandle>(null);
+  const openPreviewFullscreen = () => {
+    flushSync(() => setZoomOpen(true));
+    void zoomRef.current?.enterFullscreen();
+  };
+  const [resultOpen, setResultOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
   // ---------------- 配音 ----------------
-  const [voiceEnabled, setVoiceEnabled] = useState(false);
-  const [script, setScript] = useState(() =>
-    buildScriptFromLines(DEFAULT_VIDEO_PROPS.title, DEFAULT_VIDEO_PROPS.lines),
-  );
-  const [scriptTouched, setScriptTouched] = useState(false);
+  const [voiceEnabled, setVoiceEnabled] = useDraftField(draft, setDraft, "voiceEnabled");
+  const [script, setScript] = useDraftField(draft, setDraft, "script");
+  const [scriptTouched, setScriptTouched] = useDraftField(draft, setDraft, "scriptTouched");
   const [voices, setVoices] = useState<VoiceOption[]>([]);
   const [ttsConfig, setTtsConfig] = useState<TtsConfig | null>(null);
-  const [voiceId, setVoiceId] = useState("");
-  const [speed, setSpeed] = useState(1);
-  const [volume, setVolume] = useState(0.9);
-  const [tts, setTts] = useState<TtsResult | null>(null);
+  const [voiceId, setVoiceId] = useDraftField(draft, setDraft, "voiceId");
+  const [speed, setSpeed] = useDraftField(draft, setDraft, "speed");
+  const [volume, setVolume] = useDraftField(draft, setDraft, "volume");
+  const [tts, setTts] = useDraftField(draft, setDraft, "tts");
   const [ttsStatus, setTtsStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [ttsError, setTtsError] = useState<string | null>(null);
-  const [durationMode, setDurationMode] = useState<DurationMode>("voice");
+  const [durationMode, setDurationMode] = useDraftField(draft, setDraft, "durationMode");
   const [previewPlaying, setPreviewPlaying] = useState(false);
   const voiceAudioRef = useRef<HTMLAudioElement | null>(null);
 
+  useEffect(() => {
+    if (!active || zoomOpen || resultOpen) {
+      voiceAudioRef.current?.pause();
+    }
+    if (!active) {
+      setZoomOpen(false);
+    }
+  }, [active, zoomOpen, resultOpen]);
+
   // ---------------- 字幕 ----------------
-  const [subtitleEnabled, setSubtitleEnabled] = useState(true);
-  const [subtitleTexts, setSubtitleTexts] = useState<string[]>([]);
-  const [fontScale, setFontScale] = useState(1);
-  const [subtitleColor, setSubtitleColor] = useState("#FFFFFF");
-  const [subtitleBg, setSubtitleBg] = useState(0.45);
-  const [subtitlePos, setSubtitlePos] = useState<SubtitlePosition>("bottom");
+  const [subtitleEnabled, setSubtitleEnabled] = useDraftField(draft, setDraft, "subtitleEnabled");
+  const [subtitleTexts, setSubtitleTexts] = useDraftField(draft, setDraft, "subtitleTexts");
+  const [fontScale, setFontScale] = useDraftField(draft, setDraft, "fontScale");
+  const [subtitleColor, setSubtitleColor] = useDraftField(draft, setDraft, "subtitleColor");
+  const [subtitleBg, setSubtitleBg] = useDraftField(draft, setDraft, "subtitleBg");
+  const [subtitlePos, setSubtitlePos] = useDraftField(draft, setDraft, "subtitlePos");
 
   const pollTimer = useRef<number | null>(null);
 
   // ---------------- 图层 ----------------
   const [uploads, setUploads] = useState<UploadItem[]>([]);
-  const [layers, setLayers] = useState<Layer[]>([]);
-  const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
+  const [layers, setLayers] = useDraftField(draft, setDraft, "layers");
+  const [selectedLayerId, setSelectedLayerId] = useDraftField(draft, setDraft, "selectedLayerId");
+  const [effects, setEffects] = useDraftField(draft, setDraft, "effects");
+  const [selectedEffectId, setSelectedEffectId] = useDraftField(draft, setDraft, "selectedEffectId");
+  const manim = useManimAssets(effects, draftReady);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [editorPlaying, setEditorPlaying] = useState(false);
 
   // 支持 ?tab=voice 这类深链，方便分享与验收
   useEffect(() => {
+      if (!draftReady) return;
     const requested = new URLSearchParams(window.location.search).get("tab");
-    if (requested === "content" || requested === "visual" || requested === "layers" || requested === "voice" || requested === "subtitle") {
+    if (requested === "content" || requested === "visual" || requested === "layers" || requested === "effects" || requested === "voice" || requested === "subtitle") {
       setTab(requested);
     }
-  }, []);
+  }, [draftReady]);
 
   const updateField = useCallback((field: keyof VideoFormValues, value: string | number) => {
     setValues((previous) => {
@@ -213,17 +237,17 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
 
   // 名称默认跟随标题
   useEffect(() => {
-    if (!nameTouched) {
+    if (draftReady && !nameTouched) {
       setVideoName(values.title);
     }
-  }, [values.title, nameTouched]);
+  }, [values.title, nameTouched, draftReady]);
 
   // 讲稿默认跟随文案，用户改过后不再覆盖
   useEffect(() => {
-    if (!scriptTouched) {
+    if (draftReady && !scriptTouched) {
       setScript(buildScriptFromLines(values.title, [values.line0, values.line1, values.line2]));
     }
-  }, [values.title, values.line0, values.line1, values.line2, scriptTouched]);
+  }, [values.title, values.line0, values.line1, values.line2, scriptTouched, draftReady]);
 
   useEffect(() => {
     setDurationInput(String(values.durationInSeconds));
@@ -231,6 +255,7 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
 
   // 音色列表
   useEffect(() => {
+    if (!draftReady) return;
     let cancelled = false;
     const load = async () => {
       try {
@@ -244,7 +269,7 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
         setTtsConfig(data.config ?? null);
         const list = data.voices ?? [];
         setVoices(list);
-        setVoiceId((previous) => (previous && list.some((voice) => voice.id === previous) ? previous : (list[0]?.id ?? "")));
+        setVoiceId((previous) => previous || (list[0]?.id ?? ""));
       } catch {
         if (!cancelled) {
           setTtsConfig({
@@ -260,7 +285,48 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [draftReady, setVoiceId]);
+
+  useEffect(() => {
+    if (!draftReady || !restoredTtsId) return;
+    const controller = new AbortController();
+    setRestoringTts(true);
+    const restore = async () => {
+      try {
+        const response = await fetch(`/api/tts/${restoredTtsId}`, { cache: "no-store", signal: controller.signal });
+        const data = await response.json();
+        if (controller.signal.aborted) return;
+        if (!response.ok || !data.tts) {
+          setTtsError(data.message ?? "配音无法恢复，草稿已保留，请重新生成配音。");
+          if (response.status === 404) setTtsId(null);
+          return;
+        }
+        setTts(data.tts);
+        setTtsStatus("ready");
+      } catch {
+        if (!controller.signal.aborted) setTtsError("配音读取失败，草稿已保留；请重试或重新生成配音。");
+      } finally {
+        if (!controller.signal.aborted) setRestoringTts(false);
+      }
+    };
+    void restore();
+    return () => controller.abort();
+  }, [draftReady, restoredTtsId, setTts, setTtsId]);
+
+  useEffect(() => {
+    if (!draftReady || !jobId) return;
+    const controller = new AbortController();
+    void fetch(`/api/jobs/${jobId}`, { cache: "no-store", signal: controller.signal }).then(async (response) => {
+      const data = await response.json();
+      if (controller.signal.aborted) return;
+      if (response.ok && data.job) setJob(data.job);
+      else if (response.status === 404) {
+        setJobId(null);
+        setPollError("上次导出任务已失效，草稿已保留；已完成的视频可在素材库查看。");
+      } else setPollError("暂时无法恢复导出状态，草稿已保留。");
+    }).catch(() => { if (!controller.signal.aborted) setPollError("暂时无法恢复导出状态，草稿已保留。"); });
+    return () => controller.abort();
+  }, [draftReady, jobId, setJobId]);
 
   // 导出状态轮询
   useEffect(() => {
@@ -272,6 +338,12 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
       try {
         const response = await fetch(`/api/jobs/${job.id}`, { cache: "no-store", signal: controller.signal });
         if (!response.ok) {
+          if (response.status === 404) {
+            setJob(null);
+            setJobId(null);
+            setPollError("导出任务已失效，草稿已保留，请重新导出。");
+            return;
+          }
           setPollError(`查询进度失败（HTTP ${response.status}），正在重试…`);
           return;
         }
@@ -296,18 +368,21 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
         pollTimer.current = null;
       }
     };
-  }, [job?.id, job?.status]);
+  }, [job?.id, job?.status, setJobId]);
 
   const selectedVoice = voices.find((voice) => voice.id === voiceId) ?? null;
   const audioDuration = tts?.durationSeconds ?? 0;
-  const ttsStale = Boolean(tts) && (tts?.script !== script || tts?.voiceId !== voiceId || Math.abs((tts?.speed ?? 0) - speed) > 0.001);
+  const content = { title: values.title, lines: [values.line0, values.line1, values.line2] };
+  const ttsStale = Boolean(tts) && (tts?.script !== normalizeScript(script) || tts?.voiceId !== voiceId ||
+    Math.abs((tts?.speed ?? 0) - speed) > 0.001 || tts?.contentKey !== narrationContentKey(content) ||
+    sanitizeNarrationScenes(tts?.scenes).length !== 4);
   const durationFit = describeDurationFit(audioDuration, values.durationInSeconds);
   const voiceDuration = audioDuration > 0 ? resolveDurationFromAudio(audioDuration) : null;
   const voiceTooLong = audioDuration > DURATION_LIMITS.max;
 
   // 预览时长（跟随配音时用音频时长），字幕不能超出这一范围
   const resolvedPreviewSeconds =
-    durationMode === "voice" && voiceDuration !== null ? voiceDuration : values.durationInSeconds;
+    voiceEnabled && !ttsStale && durationMode === "voice" && voiceDuration !== null ? voiceDuration : values.durationInSeconds;
   const previewMaxFrame = Math.round(Math.max(1, resolvedPreviewSeconds) * VIDEO_CONFIG.fps);
 
   const subtitleCues = useMemo(() => {
@@ -327,10 +402,21 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
       });
   }, [tts, subtitleTexts, previewMaxFrame]);
 
+  const [subtitleDownloadUrl, setSubtitleDownloadUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!subtitleCues.length || ttsStale || restoringTts) {
+      setSubtitleDownloadUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(new Blob([cuesToSrt(subtitleCues, VIDEO_CONFIG.fps)], { type: "text/plain;charset=utf-8" }));
+    setSubtitleDownloadUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [subtitleCues, ttsStale, restoringTts]);
+
   const previewProps = useMemo<VideoProps>(() => {
     const base = toPreviewProps(values);
     const seconds = resolvedPreviewSeconds;
-    const narrationEnabled = voiceEnabled && Boolean(tts);
+    const narrationEnabled = voiceEnabled && Boolean(tts) && !ttsStale && !restoringTts;
     return {
       ...base,
       durationInSeconds: seconds,
@@ -340,16 +426,19 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
         ttsId: tts?.id ?? null,
         audioSrc: tts?.audioUrl ?? null,
         script,
-        voiceId: selectedVoice?.id ?? null,
-        voiceName: selectedVoice?.name ?? null,
+        voiceId: voiceId || null,
+        voiceName: selectedVoice?.name ?? tts?.voiceName ?? null,
         provider: (tts?.provider as VideoProps["narration"]["provider"]) ?? null,
         speed,
         volume,
         audioDurationSeconds: audioDuration,
+        scenes: tts?.scenes ?? [],
       },
-      layers,
+      layers: sanitizeLayers(layers, Math.round(seconds * VIDEO_CONFIG.fps)),
+      effects: sanitizeEffects(effects, Math.round(seconds * VIDEO_CONFIG.fps)),
+      manimAssets: manim.assets,
       subtitles: {
-        enabled: subtitleEnabled && subtitleCues.length > 0,
+        enabled: subtitleEnabled && subtitleCues.length > 0 && !ttsStale && !restoringTts,
         fontScale,
         color: subtitleColor,
         backgroundOpacity: subtitleBg,
@@ -362,6 +451,9 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
     resolvedPreviewSeconds,
     voiceEnabled,
     tts,
+    ttsStale,
+    restoringTts,
+    voiceId,
     script,
     selectedVoice,
     speed,
@@ -374,11 +466,14 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
     subtitleBg,
     subtitlePos,
     layers,
+    effects,
+    manim.assets,
   ]);
 
   const selectedLayer = layers.find((layer) => layer.id === selectedLayerId) ?? null;
   const isBusy = job?.status === "queued" || job?.status === "rendering";
   const isWorking = submitting || isBusy;
+  const exportBlocked = isWorking || !draftReady || (voiceEnabled && (!tts || ttsStale || restoringTts || ttsStatus === "loading"));
   const progressPercent = Math.round((job?.progress ?? 0) * 100);
   const statusKey = job ? job.status : "idle";
   const durationFrames = getDurationInFrames(previewProps);
@@ -387,6 +482,11 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
   const safeName = sanitizeVideoName(videoName, values.title);
 
   const handleGenerateTts = useCallback(async () => {
+    if (!parseNarrationScenes(script)) {
+      setTtsError("讲解稿请分成四段，依次对应标题、第一段、第二段和第三段，每段另起一行。");
+      setTtsStatus("error");
+      return;
+    }
     if (!script.trim()) {
       setTtsError("讲解稿不能为空。");
       setTtsStatus("error");
@@ -403,7 +503,7 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
       const response = await fetch("/api/tts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ script, voiceId, speed }),
+        body: JSON.stringify({ script, voiceId, speed, content: { title: values.title, lines: [values.line0, values.line1, values.line2] } }),
       });
       const data = (await response.json().catch(() => null)) as
         | { tts?: TtsResult; message?: string }
@@ -414,6 +514,7 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
         return;
       }
       setTts(data.tts);
+      setTtsId(data.tts.id);
       setSubtitleTexts(data.tts.cues.map((cue) => cue.text));
       setTtsStatus("ready");
       setVoiceEnabled(true);
@@ -427,7 +528,7 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
       setTtsError("无法连接配音服务，请确认开发服务器仍在运行。");
       setTtsStatus("error");
     }
-  }, [script, voiceId, speed]);
+  }, [script, voiceId, speed, values, setTts, setTtsId, setSubtitleTexts, setVoiceEnabled]);
 
   const togglePreviewAudio = useCallback(async () => {
     const audio = voiceAudioRef.current;
@@ -498,6 +599,10 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
 
   const addImageLayer = useCallback(
     (upload: UploadItem) => {
+      if (layers.length >= LAYER_LIMITS.maxLayers) {
+        setUploadError(`最多添加 ${LAYER_LIMITS.maxLayers} 个图层，请先删除不需要的图层。`);
+        return;
+      }
       const canvas = getVideoSize(previewProps);
       const layer = createImageLayer(upload, canvas, {
         endFrame: getDurationInFrames(previewProps),
@@ -505,14 +610,33 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
       setLayers((previous) => [...previous, layer]);
       setSelectedLayerId(layer.id);
     },
-    [previewProps],
+    [previewProps, layers.length],
   );
 
   const addTextLayer = useCallback(() => {
+    if (layers.length >= LAYER_LIMITS.maxLayers) {
+      setUploadError(`最多添加 ${LAYER_LIMITS.maxLayers} 个图层，请先删除不需要的图层。`);
+      return;
+    }
     const layer = createTextLayer({ endFrame: getDurationInFrames(previewProps) });
     setLayers((previous) => [...previous, layer]);
     setSelectedLayerId(layer.id);
-  }, [previewProps]);
+  }, [previewProps, layers.length]);
+
+  const deleteUpload = useCallback(async (upload: UploadItem) => {
+    if (layers.some((layer) => layer.kind === "image" && layer.src === upload.url)) {
+      setUploadError("图片仍在当前画面中使用，请先删除对应图层再删除图片素材。");
+      return;
+    }
+    if (!window.confirm(`删除图片「${upload.name}」？其它浏览器中的草稿如使用该图片，将需要重新上传。`)) return;
+    try {
+      const response = await fetch(upload.url, { method: "DELETE" });
+      const data = await response.json();
+      if (!response.ok || !data.deleted) { setUploadError(data.message ?? "删除图片失败，请重试。"); return; }
+      setUploads((previous) => previous.filter((item) => item.id !== upload.id));
+      setUploadError(null);
+    } catch { setUploadError("无法连接服务器，图片未删除。"); }
+  }, [layers]);
 
   const updateLayer = useCallback(
     (id: string, patch: Partial<TextLayer> & Partial<ImageLayer>) => {
@@ -559,7 +683,12 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
   const handleExport = useCallback(async () => {
     setSubmitError(null);
     setPollError(null);
-    if (isWorking) {
+    if (isWorking || !draftReady) {
+      return;
+    }
+    if (voiceEnabled && (ttsStale || restoringTts || ttsStatus === "loading")) {
+      setSubmitError("配音正在生成或已过期，请重新生成有效配音后导出。");
+      setTab("voice");
       return;
     }
     const result = validateFormValues(values);
@@ -590,6 +719,7 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
         narration: previewProps.narration,
         subtitles: previewProps.subtitles,
         layers,
+        effects,
         durationInSeconds: previewProps.durationInSeconds,
       };
       const response = await fetch("/api/render", {
@@ -608,7 +738,7 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
         return;
       }
       setJob(data.job);
-      setSubmittedProps(payload as unknown as VideoProps);
+      setJobId(data.job.id);
     } catch {
       setSubmitError("无法连接渲染服务，请确认开发服务器仍在运行。");
     } finally {
@@ -617,6 +747,10 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
   }, [
     values,
     isWorking,
+    draftReady,
+    ttsStale,
+    restoringTts,
+    ttsStatus,
     voiceEnabled,
     tts,
     voiceTooLong,
@@ -625,6 +759,9 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
     durationMode,
     previewProps,
     layers,
+    effects,
+    setJobId,
+    setTab,
   ]);
 
   const jobSize = job?.outputWidth && job?.outputHeight ? `${job.outputWidth}×${job.outputHeight}` : "—";
@@ -633,6 +770,84 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
     : voiceEnabled
       ? "已开启配音，等待生成"
       : "未启用配音";
+
+  const exportPanel = (<section className="card export-card">
+              <div className="card-head">
+                <div className="card-title">
+                  <h2>导出</h2>
+                  <span className="card-note">串行队列 · 一次一个任务</span>
+                </div>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => void handleExport()} disabled={exportBlocked}>
+                  {isWorking ? <span className="spinner dark" aria-hidden="true" /> : null}
+                  {isWorking ? "导出中…" : "导出视频"}
+                </button>
+              </div>
+
+              <div className="export-body">
+                {submitError ? <p className="notice warn" role="alert">{submitError}</p> : null}
+                <div className="status-row">
+                  <span className={`status-pill ${statusKey}`}>
+                    <i aria-hidden="true" />
+                    {job ? STATUS_TEXT[job.status] : "尚未导出"}
+                  </span>
+                  <span className="status-detail">
+                    {job
+                      ? job.status === "queued"
+                        ? `排队第 ${job.queuePosition || 1} 位 · ${job.totalFrames} 帧`
+                        : job.status === "rendering"
+                          ? `${job.renderedFrames}/${job.totalFrames} 帧`
+                          : job.status === "success"
+                            ? `${formatClock(job.totalFrames / VIDEO_CONFIG.fps)} · ${jobSize} · ${formatSize(job.fileSize ?? 0)}`
+                            : `用时 ${((job.durationMs ?? 0) / 1000).toFixed(1)}s`
+                      : "填好内容后点击导出，进度来自真实渲染"}
+                  </span>
+                </div>
+
+                {job && isBusy ? (
+                  <div className="progress" role="progressbar" aria-valuenow={progressPercent} aria-valuemin={0} aria-valuemax={100}>
+                    <div className="progress-fill" style={{ width: `${progressPercent}%` }} />
+                  </div>
+                ) : null}
+
+                {pollError ? <p className="notice">{pollError}</p> : null}
+
+                {job?.status === "failed" ? (
+                  <div className="alert error" role="alert">
+                    <strong>导出失败</strong>
+                    <span>{job.error ?? "未知错误"}</span>
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => void handleExport()}>
+                      重试
+                    </button>
+                  </div>
+                ) : null}
+
+                {job?.status === "success" && job.videoUrl ? (
+                  <div className="result">
+                    <ResultVideo key={job.id} src={job.videoUrl} title={job.name ?? values.title}
+                      active={active && !zoomOpen} onExpandedChange={setResultOpen}>
+                      <DownloadVideo id={job.id} name={job.name ?? values.title} className="btn btn-primary" href={job.downloadUrl ?? job.videoUrl}>
+                        {icons.download}
+                        下载 MP4
+                      </DownloadVideo>
+                      <button type="button" className="btn btn-ghost" onClick={() => onNavigate("merge")}>
+                        去拼接
+                      </button>
+                    </ResultVideo>
+                    <p className="result-note">
+                      名称：{job.name ?? "—"} · 文件：output/{job.fileName}
+                    </p>
+                  </div>
+                ) : null}
+
+                {!job ? (
+                  <div className="hint-line">
+                    导出后这里会显示成片、真实进度与下载入口；单段时长 5–15 秒。
+                  </div>
+                ) : null}
+              </div>
+            </section>);
+
+  if (!draftReady) return <main className="page"><p role="status">正在恢复编辑草稿…</p></main>;
 
   return (
     <>
@@ -657,7 +872,7 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
               type="button"
               className="btn btn-primary"
               onClick={() => void handleExport()}
-              disabled={isWorking}
+              disabled={exportBlocked}
             >
               {isWorking ? <span className="spinner" aria-hidden="true" /> : icons.spark}
               {submitting ? "提交中…" : isBusy ? "导出中…" : "导出视频"}
@@ -666,8 +881,8 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
         }
       />
 
-      <main className="page">
-        <div className="page-head">
+      <main className="page generator-page" data-editor-tab={tab}>
+        <AnimatedContent className="page-head" active={active}>
           <div>
             <h1 className="page-title">把知识讲清楚，也讲生动</h1>
             <p className="page-sub">写一段讲解稿，选画面与音色，字幕会跟着配音自动对齐。</p>
@@ -677,27 +892,54 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
             <span className="chip neutral">{RATIO_MAP[previewProps.ratio].id}</span>
             <span className="chip neutral">{formatClock(previewProps.durationInSeconds)}</span>
           </div>
-        </div>
+        </AnimatedContent>
 
+        <div className="editor-toolbar">
         <div className="tabs page-tabs" role="tablist" aria-label="设置分类">
           {TABS.map((item) => (
             <button
               key={item.id}
               type="button"
               role="tab"
+              id={`setting-tab-${item.id}`}
+              aria-controls="generator-settings-panel"
               aria-selected={tab === item.id}
+              tabIndex={tab === item.id ? 0 : -1}
               className={`tab${tab === item.id ? " active" : ""}`}
               onClick={() => setTab(item.id)}
+              onKeyDown={(event) => {
+                const offset = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+                const index = TABS.findIndex((entry) => entry.id === item.id);
+                const next = event.key === "Home" ? TABS[0] : event.key === "End" ? TABS[TABS.length - 1] : offset ? TABS[(index + offset + TABS.length) % TABS.length] : null;
+                if (!next) return;
+                event.preventDefault();
+                setTab(next.id);
+                document.getElementById(`setting-tab-${next.id}`)?.focus();
+              }}
               title={item.hint}
             >
               {item.label}
               {item.id === "voice" && voiceEnabled ? <span className="tab-dot" aria-hidden="true" /> : null}
               {item.id === "layers" && layers.length > 0 ? <span className="tab-count">{layers.length}</span> : null}
+              {item.id === "effects" && effects.length > 0 ? <span className="tab-count">{effects.length}</span> : null}
             </button>
           ))}
         </div>
+        <p className="draft-status" role="status"><span aria-hidden="true" />{storageMessage}{restoringTts ? " · 正在恢复配音…" : ""}</p>
+        </div>
 
-        {tab === "layers" ? (
+        {voiceEnabled && ttsStale ? (
+          <div className="notice warn" role="alert">
+            文案、讲稿、音色或语速已修改，配音已过期，暂时无法导出。
+            <button type="button" className="btn-text" onClick={() => setTab("voice")}>去重新生成配音</button>
+          </div>
+        ) : null}
+
+        <div id="generator-settings-panel" role="tabpanel" aria-labelledby={`setting-tab-${tab}`} className="workspace-panel">
+        {tab === "effects" ? (
+          <EffectWorkspace effects={effects} setEffects={setEffects} selectedId={selectedEffectId} onSelect={setSelectedEffectId}
+            previewProps={previewProps} active={active && !zoomOpen && !resultOpen} onFullscreen={openPreviewFullscreen} exportContent={exportPanel} manimJobs={manim.jobs} onRetryManim={manim.retry} />
+        ) : tab === "layers" ? (
           <div className="split split-editor">
             <aside className="card editor-card">
               <div className="card-head">
@@ -714,6 +956,7 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
                 uploadError={uploadError}
                 onUpload={(files) => void uploadFiles(files)}
                 onAddImage={addImageLayer}
+                onDeleteUpload={(upload) => void deleteUpload(upload)}
                 onAddText={addTextLayer}
                 onSelect={setSelectedLayerId}
                 onToggleHidden={(id) => toggleLayer(id, "hidden")}
@@ -742,12 +985,14 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
 
               <div className="canvas editor-canvas">
                 <PreviewPlayer
+                  active={active && !zoomOpen && !resultOpen}
+                  onRequestFullscreen={openPreviewFullscreen}
                   editing
                   inputProps={previewProps}
                   onPlayingChange={setEditorPlaying}
                   overlay={
                     <LayerOverlay
-                      layers={layers}
+                      layers={previewProps.layers}
                       selectedId={selectedLayerId}
                       canvas={previewSize}
                       playing={editorPlaying}
@@ -779,6 +1024,7 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
             <aside className="card editor-card inspector-card">
               <LayerInspector
                 layer={selectedLayer}
+                canvas={previewSize}
                 durationSeconds={previewProps.durationInSeconds}
                 onChange={(patch) => {
                   if (selectedLayerId) {
@@ -792,6 +1038,7 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
         <div className="split">
           {/* 左：设置 */}
           <section className="card settings">
+            <div className="card-head settings-heading"><div className="card-title"><h2>{TABS.find((item) => item.id === tab)?.label}设置</h2><span className="card-note">{TABS.find((item) => item.id === tab)?.hint}</span></div></div>
             <div className="settings-body">
               <form
                 id={FORM_ID}
@@ -882,8 +1129,9 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
                         {VIDEO_TEMPLATES.map((template) => {
                           const selected = values.template === template.id;
                           return (
-                            <button
+                            <SpotlightCard
                               key={template.id}
+                              as="button"
                               type="button"
                               role="radio"
                               aria-checked={selected}
@@ -897,7 +1145,7 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
                                 <span className="template-name">{template.name}</span>
                                 <span className="template-desc">{template.description}</span>
                               </span>
-                            </button>
+                            </SpotlightCard>
                           );
                         })}
                       </div>
@@ -953,7 +1201,7 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
                                 updateField("durationInSeconds", Math.round(parsed * 2) / 2);
                               }
                             }}
-                            disabled={durationMode === "voice" && Boolean(tts)}
+                            disabled={durationMode === "voice" && previewProps.narration.enabled}
                           />
                           <span className="unit">秒</span>
                         </div>
@@ -965,7 +1213,7 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
                         max={DURATION_LIMITS.max}
                         step={1}
                         value={values.durationInSeconds}
-                        disabled={durationMode === "voice" && Boolean(tts)}
+                        disabled={durationMode === "voice" && previewProps.narration.enabled}
                         onChange={(event) => updateField("durationInSeconds", Number(event.target.value))}
                       />
                       <p className="field-hint">
@@ -1117,10 +1365,10 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
                           setScriptTouched(true);
                           setScript(event.target.value);
                         }}
-                        placeholder="写成一句一句的口播稿，句末用句号，字幕会按句对齐。"
+                        placeholder={"标题讲解\n第一段讲解\n第二段讲解\n第三段讲解"}
                       />
                       <p className="field-hint">
-                        按句号、问号、逗号断句；每屏字幕不超过两行。单段 15 秒约 45–60 字，超长请拆镜头。
+                        分成四段，每段另起一行，依次对应标题和三段正文。画面与字幕跟随每段实际配音时间；15 秒约 45–60 字。
                       </p>
                     </div>
 
@@ -1135,6 +1383,7 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
                         onChange={(event) => setVoiceId(event.target.value)}
                         disabled={voices.length === 0}
                       >
+                        {voiceId && !voices.some((voice) => voice.id === voiceId) ? <option value={voiceId}>{tts?.voiceName ?? voiceId}（当前不可生成）</option> : null}
                         {voices.length === 0 ? <option value="">暂无可用音色</option> : null}
                         {voices.map((voice) => (
                           <option key={voice.id} value={voice.id}>
@@ -1216,7 +1465,7 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
                       <div className="field">
                         <div className="label-row">
                           <span className="label">字幕文本（{subtitleCues.length} 屏）</span>
-                          <a className="link" href={tts.srtUrl}>
+                          <a className="link" href={subtitleDownloadUrl ?? undefined} download={toDownloadFileName(videoName, ".srt")} aria-disabled={!subtitleDownloadUrl}>
                             下载 SRT
                           </a>
                         </div>
@@ -1340,7 +1589,7 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
                       type="button"
                       className="btn btn-primary"
                       onClick={() => void handleGenerateTts()}
-                      disabled={ttsStatus === "loading" || !voiceId}
+                      disabled={ttsStatus === "loading" || restoringTts || !voiceId}
                     >
                       {ttsStatus === "loading" ? <span className="spinner" aria-hidden="true" /> : icons.mic}
                       {ttsStatus === "loading" ? "生成中…" : tts ? "重新生成配音" : "生成配音"}
@@ -1375,7 +1624,7 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
                         配音已生成 · {tts.durationSeconds.toFixed(1)} 秒 · {tts.voiceName} ·{" "}
                         {tts.chunkCount} 句 · 语速 {tts.speed.toFixed(2)}×
                       </span>
-                      <a className="link" href={tts.srtUrl}>
+                      <a className="link" href={subtitleDownloadUrl ?? undefined} download={toDownloadFileName(videoName, ".srt")} aria-disabled={!subtitleDownloadUrl}>
                         下载 SRT
                       </a>
                     </div>
@@ -1388,7 +1637,7 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
 
                   {ttsStale ? (
                     <div className="notice warn">
-                      讲稿、音色或语速已修改，请重新生成配音后再导出，否则成片仍是旧音频。
+                      配音已过期，请重新生成；更新前导出已暂停。
                     </div>
                   ) : null}
 
@@ -1398,17 +1647,7 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
                     </div>
                   ) : null}
 
-                  {tts ? (
-                    <audio
-                      ref={voiceAudioRef}
-                      className="audio-preview"
-                      src={tts.audioUrl}
-                      controls
-                      onPlay={() => setPreviewPlaying(true)}
-                      onPause={() => setPreviewPlaying(false)}
-                      onEnded={() => setPreviewPlaying(false)}
-                    />
-                  ) : null}
+
                 </div>
               ) : null}
 
@@ -1445,7 +1684,7 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
               </div>
 
               <div className="canvas">
-                <PreviewPlayer inputProps={previewProps} />
+                <PreviewPlayer active={active && !zoomOpen && !resultOpen} inputProps={previewProps} onRequestFullscreen={openPreviewFullscreen} />
               </div>
 
               <div className="preview-meta">
@@ -1472,87 +1711,15 @@ export default function GeneratorClient({ onNavigate, onOpenNav }: GeneratorClie
               </div>
             </section>
 
-            <section className="card export-card">
-              <div className="card-head">
-                <div className="card-title">
-                  <h2>导出</h2>
-                  <span className="card-note">串行队列 · 一次一个任务</span>
-                </div>
-                <button type="button" className="btn btn-ghost btn-sm" onClick={() => void handleExport()} disabled={isWorking}>
-                  {isWorking ? <span className="spinner dark" aria-hidden="true" /> : null}
-                  {isWorking ? "导出中…" : "导出视频"}
-                </button>
-              </div>
-
-              <div className="export-body">
-                <div className="status-row">
-                  <span className={`status-pill ${statusKey}`}>
-                    <i aria-hidden="true" />
-                    {job ? STATUS_TEXT[job.status] : "尚未导出"}
-                  </span>
-                  <span className="status-detail">
-                    {job
-                      ? job.status === "queued"
-                        ? `排队第 ${job.queuePosition || 1} 位 · ${job.totalFrames} 帧`
-                        : job.status === "rendering"
-                          ? `${job.renderedFrames}/${job.totalFrames} 帧`
-                          : job.status === "success"
-                            ? `${formatClock(job.totalFrames / VIDEO_CONFIG.fps)} · ${jobSize} · ${formatSize(job.fileSize ?? 0)}`
-                            : `用时 ${((job.durationMs ?? 0) / 1000).toFixed(1)}s`
-                      : "填好内容后点击导出，进度来自真实渲染"}
-                  </span>
-                </div>
-
-                {job && isBusy ? (
-                  <div className="progress" role="progressbar" aria-valuenow={progressPercent} aria-valuemin={0} aria-valuemax={100}>
-                    <div className="progress-fill" style={{ width: `${progressPercent}%` }} />
-                  </div>
-                ) : null}
-
-                {pollError ? <p className="notice">{pollError}</p> : null}
-
-                {job?.status === "failed" ? (
-                  <div className="alert error" role="alert">
-                    <strong>导出失败</strong>
-                    <span>{job.error ?? "未知错误"}</span>
-                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => void handleExport()}>
-                      重试
-                    </button>
-                  </div>
-                ) : null}
-
-                {job?.status === "success" && job.videoUrl ? (
-                  <div className="result">
-                    <video className="result-video" src={job.videoUrl} controls playsInline preload="metadata" />
-                    <div className="result-actions">
-                      <a className="btn btn-primary" href={job.downloadUrl ?? job.videoUrl} download={job.name ? `${job.name}.mp4` : job.fileName}>
-                        {icons.download}
-                        下载 MP4
-                      </a>
-                      <button type="button" className="btn btn-ghost" onClick={() => onNavigate("merge")}>
-                        去拼接
-                      </button>
-                    </div>
-                    <p className="result-note">
-                      名称：{job.name ?? "—"} · 文件：output/{job.fileName}
-                    </p>
-                  </div>
-                ) : null}
-
-                {!job ? (
-                  <div className="hint-line">
-                    导出后这里会显示成片、真实进度与下载入口；单段时长 5–15 秒。
-                  </div>
-                ) : null}
-              </div>
-            </section>
+            {exportPanel}
           </div>
         </div>
         )}
+        </div>
       </main>
 
-      <VideoLightbox open={zoomOpen} title={videoName || values.title} onClose={() => setZoomOpen(false)}>
-        <PreviewPlayer inputProps={previewProps} />
+      <VideoLightbox ref={zoomRef} open={zoomOpen} title={videoName || values.title} onClose={() => setZoomOpen(false)}>
+        <PreviewPlayer active={active && zoomOpen} inputProps={previewProps} />
       </VideoLightbox>
 
       <Toast message={toast} onDone={() => setToast(null)} />

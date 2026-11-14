@@ -5,6 +5,9 @@ import { bundle } from "@remotion/bundler";
 import { OUTPUT_DIR } from "./library";
 import { TTS_DIR } from "./tts";
 import { UPLOAD_DIR } from "./uploads";
+import { parseByteRange } from "./httpRange";
+import { resolveInside } from "./filePaths";
+import { MANIM_DIR } from "./manim";
 
 /**
  * Remotion 渲染时需要一个可通过 HTTP 访问的 bundle 地址。
@@ -86,7 +89,13 @@ const createStaticServer = (bundleDir: string): Promise<http.Server> =>
       const isMedia = pathname.startsWith(mediaPrefix);
       const isTts = pathname.startsWith(ttsPrefix);
       const isUpload = pathname.startsWith(uploadPrefix);
-      if (isMedia) {
+      const isManim = pathname.startsWith("/manim/");
+      if (isManim) {
+        if (!/^\/manim\/[a-f0-9]{64}\/frames\/\d{5}\.png$/.test(pathname)) {
+          response.writeHead(404); response.end(); return;
+        }
+        pathname = pathname.slice("/manim".length);
+      } else if (isMedia) {
         pathname = pathname.slice(mediaPrefix.length - 1);
       } else if (isTts) {
         pathname = pathname.slice(ttsPrefix.length - 1);
@@ -98,9 +107,11 @@ const createStaticServer = (bundleDir: string): Promise<http.Server> =>
         pathname = `${pathname}index.html`;
       }
 
-      const rootDir = isUpload ? UPLOAD_DIR : isTts ? TTS_DIR : isMedia ? OUTPUT_DIR : bundleDir;
-      const filePath = path.normalize(path.join(rootDir, pathname));
-      if (!filePath.startsWith(path.normalize(rootDir))) {
+      const rootDir = isManim ? MANIM_DIR : isUpload ? UPLOAD_DIR : isTts ? TTS_DIR : isMedia ? OUTPUT_DIR : bundleDir;
+      let filePath: string;
+      try {
+        filePath = resolveInside(rootDir, pathname.replace(/^[/\\]+/, ""));
+      } catch {
         response.writeHead(403);
         response.end("Forbidden");
         return;
@@ -119,22 +130,26 @@ const createStaticServer = (bundleDir: string): Promise<http.Server> =>
           "Accept-Ranges": "bytes",
         };
 
-        const range = request.headers.range ? /^bytes=(\d*)-(\d*)$/.exec(request.headers.range.trim()) : null;
-        if (range && (isMedia || isTts)) {
-          const start = range[1] === "" ? 0 : Number.parseInt(range[1], 10);
-          const end = range[2] === "" ? stat.size - 1 : Math.min(Number.parseInt(range[2], 10), stat.size - 1);
-          if (Number.isFinite(start) && Number.isFinite(end) && start <= end && start < stat.size) {
+        if (request.headers.range && (isMedia || isTts)) {
+          const range = parseByteRange(request.headers.range, stat.size);
+          if (range) {
+            const { start, end } = range;
             headers["Content-Range"] = `bytes ${start}-${end}/${stat.size}`;
             headers["Content-Length"] = end - start + 1;
             response.writeHead(206, headers);
-            fs.createReadStream(filePath, { start, end }).pipe(response);
+            if (request.method === "HEAD") response.end();
+            else fs.createReadStream(filePath, { start, end }).on("error", () => response.destroy()).pipe(response);
             return;
           }
+          response.writeHead(416, { ...headers, "Content-Range": `bytes */${stat.size}` });
+          response.end();
+          return;
         }
 
         headers["Content-Length"] = stat.size;
         response.writeHead(200, headers);
-        fs.createReadStream(filePath).pipe(response);
+        if (request.method === "HEAD") response.end();
+        else fs.createReadStream(filePath).on("error", () => response.destroy()).pipe(response);
       });
     });
 

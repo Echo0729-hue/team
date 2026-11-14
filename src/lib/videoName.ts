@@ -53,7 +53,7 @@ export const buildUniqueVideoName = (
 
   for (let index = 2; index < 1000; index += 1) {
     const suffix = ` (${index})`;
-    const head = truncateVideoName(base.slice(0, Math.max(1, VIDEO_NAME_MAX_LENGTH - suffix.length))).trimEnd();
+    const head = Array.from(base).slice(0, Math.max(1, VIDEO_NAME_MAX_LENGTH - suffix.length)).join("").trimEnd();
     const candidate = `${head}${suffix}`;
     if (!taken.has(candidate.toLowerCase())) {
       return candidate;
@@ -64,5 +64,5 @@ export const buildUniqueVideoName = (
 };
 
 /** 下载时使用的文件名（保留中文，去掉结尾多余点号） */
-export const toDownloadFileName = (name: string): string =>
-  `${sanitizeVideoName(name).replace(/\.+$/, "") || FALLBACK_VIDEO_NAME}.mp4`;
+export const toDownloadFileName = (name: string, extension: ".mp4" | ".wav" | ".srt" = ".mp4"): string =>
+  `${sanitizeVideoName(name).replace(/\.+$/, "") || FALLBACK_VIDEO_NAME}${extension}`;
