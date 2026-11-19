@@ -1,0 +1,113 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { chromium } from "playwright";
+
+const base = process.env.TEST_BASE_URL ?? "http://127.0.0.1:3000";
+const output = path.resolve("test-results/react-bits");
+fs.mkdirSync(output, { recursive: true });
+const passed = [];
+const errors = [];
+const check = (name, ok) => { assert.ok(ok, name); passed.push(name); console.log(`PASS ${name}`); };
+const nav = (page, name) => page.locator(".sidebar .nav-item").filter({ hasText: name }).click();
+const fits = (page) => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
+const browser = await chromium.launch({ headless: true, ...(process.env.BROWSER_PATH ? {
+  executablePath: process.env.BROWSER_PATH,
+} : process.platform === "win32" ? { channel: "msedge" } : {}) });
+const newContext = async (options) => {
+  const context = await browser.newContext(options);
+  context.on("page", (page) => page.on("pageerror", (error) => errors.push(error.message)));
+  return context;
+};
+
+try {
+  const desktop = await newContext({ viewport: { width: 1440, height: 1000 } });
+  const page = await desktop.newPage();
+  await page.goto(base + "/#generate", { waitUntil: "networkidle" });
+  await page.locator("#title").fill("组件回归草稿");
+  await page.getByRole("tab", { name: /^画面/ }).click();
+  const cards = page.locator(".template-card");
+  check("all six templates retain button and radio semantics", await cards.count() === 6 && await cards.first().evaluate((node) => node.tagName === "BUTTON" && node.getAttribute("role") === "radio"));
+  await cards.nth(1).hover();
+  await page.waitForFunction(() => document.querySelectorAll(".template-card")[1]?.hasAttribute("data-spotlight-active"));
+  check("template spotlight follows the pointer", await cards.nth(1).evaluate((node) => !!node.style.getPropertyValue("--rb-spotlight-x")));
+  check("light never intercepts clicks", await cards.nth(1).locator(".rb-spotlight-light").evaluate((node) => getComputedStyle(node).pointerEvents === "none"));
+  await cards.nth(1).click();
+  check("template selection updates normally", await cards.nth(1).getAttribute("aria-checked") === "true");
+  check("all template cards fit within their grid", await cards.evaluateAll((nodes) => nodes.every((node) => node.getBoundingClientRect().right <= node.parentElement.getBoundingClientRect().right + 1)));
+  await cards.nth(1).dispatchEvent("pointercancel", { pointerType: "mouse" });
+  check("cancel clears the following light", !(await cards.nth(1).getAttribute("data-spotlight-active")));
+  await cards.nth(2).focus();
+  await page.keyboard.press("Space");
+  check("keyboard can select templates", await cards.nth(2).getAttribute("aria-checked") === "true");
+  await page.waitForFunction(() => getComputedStyle(document.querySelector(".page-head")).transform === "none");
+  check("heading animation releases transforms after settling", await page.locator(".page-head:visible").evaluate((node) => getComputedStyle(node).filter === "none"));
+  await cards.nth(2).hover();
+  await page.screenshot({ path: path.join(output, "editor-desktop.png"), fullPage: true });
+  await nav(page, "素材库");
+  await page.locator(".lib-card:not(.skeleton)").first().waitFor();
+  const first = page.locator(".lib-card").first();
+  check("material cards retain article semantics", await first.evaluate((node) => node.tagName === "ARTICLE"));
+  await first.locator(".lib-body").hover();
+  await page.waitForFunction(() => document.querySelector(".lib-card")?.hasAttribute("data-spotlight-active"));
+  check("material spotlight activates locally", true);
+  await first.getByRole("button", { name: "播放", exact: true }).click();
+  await page.getByRole("dialog").waitFor();
+  check("material playback still opens", await page.getByRole("dialog").locator("video").count() === 1);
+  await page.getByRole("button", { name: "关闭预览" }).click();
+  await first.getByRole("button", { name: "重命名", exact: true }).click();
+  const rename = first.getByRole("textbox");
+  check("rename input keeps keyboard focus", await rename.evaluate((node) => node === document.activeElement));
+  await rename.press("Escape");
+  check("rename cancel remains available", await first.getByRole("button", { name: "重命名", exact: true }).isVisible());
+  const search = page.getByRole("searchbox", { name: "按名称搜索素材" });
+  await search.fill("a-nonexistent-video-284912");
+  check("search still filters all material cards", await page.locator(".lib-card").count() === 0);
+  await page.getByRole("button", { name: "清空搜索", exact: true }).first().click();
+  await page.locator(".lib-card").first().waitFor();
+  await page.locator(".lib-card").first().locator(".lib-body").hover();
+  await page.screenshot({ path: path.join(output, "library-desktop.png"), fullPage: true });
+  await nav(page, "视频拼接");
+  check("merge controls remain accessible", await page.getByRole("heading", { name: "视频拼接", exact: true }).isVisible());
+  await page.screenshot({ path: path.join(output, "merge-desktop.png"), fullPage: true });
+  await nav(page, "生成视频");
+  await page.getByRole("tab", { name: /^内容/ }).click();
+  check("workspace navigation retains unsaved input", await page.locator("#title").inputValue() === "组件回归草稿");
+  check("desktop has no horizontal page overflow", await fits(page));
+
+  await page.getByRole("tab", { name: /^画面/ }).click();
+  await cards.first().hover();
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.waitForFunction(() => !document.querySelector(".template-card")?.hasAttribute("data-spotlight-active"));
+  check("changing reduced-motion preference clears active effects", true);
+  await cards.first().hover();
+  check("reduced motion disables pointer lighting", await cards.first().locator(".rb-spotlight-light").evaluate((node) => getComputedStyle(node).display === "none"));
+  await nav(page, "视频拼接");
+  check("reduced motion keeps headings static", await page.locator(".page-head:visible").evaluate((node) => node.getAnimations().length === 0 && getComputedStyle(node).opacity === "1"));
+  await desktop.close();
+
+  const mobile = await newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  const phone = await mobile.newPage();
+  await phone.goto(base + "/#generate", { waitUntil: "networkidle" });
+  await phone.getByRole("tab", { name: /^画面/ }).click();
+  await phone.locator(".template-card").nth(1).tap();
+  check("touch can select templates", await phone.locator(".template-card").nth(1).getAttribute("aria-checked") === "true");
+  check("touch has no pointer-follow lighting", await phone.locator(".rb-spotlight-light").first().evaluate((node) => getComputedStyle(node).display === "none"));
+  check("mobile editor has no horizontal overflow", await fits(phone));
+  await phone.evaluate(() => window.scrollTo(0, 0));
+  await phone.waitForTimeout(300);
+  await phone.screenshot({ path: path.join(output, "editor-mobile.png"), fullPage: true });
+  await phone.getByRole("button", { name: "打开导航" }).click();
+  await nav(phone, "素材库");
+  await phone.locator(".lib-card:not(.skeleton)").first().waitFor();
+  check("mobile library actions remain visible", await phone.locator(".lib-card").first().getByRole("button", { name: "播放", exact: true }).isVisible());
+  check("mobile library has no horizontal overflow", await fits(phone));
+  await phone.evaluate(() => window.scrollTo(0, 0));
+  await phone.waitForTimeout(300);
+  await phone.screenshot({ path: path.join(output, "library-mobile.png"), fullPage: true });
+  await mobile.close();
+  check("no browser runtime errors", errors.length === 0);
+} finally {
+  await browser.close();
+  fs.writeFileSync(path.join(output, "verification.json"), JSON.stringify({ passed, errors }, null, 2));
+}

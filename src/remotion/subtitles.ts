@@ -72,12 +72,12 @@ export const wrapSubtitleText = (
   }
 
   const chars = Array.from(clean);
-  const middle = chars.length / 2;
+  const middle = Math.min(maxChars, chars.length / 2);
   let breakAt = -1;
   let bestDistance = Number.POSITIVE_INFINITY;
 
   for (let index = 1; index < chars.length - 1; index += 1) {
-    if (!BREAK_CHARS.includes(chars[index])) {
+    if (!BREAK_CHARS.includes(chars[index]) || index + 1 > maxChars || (chars.length <= maxChars * 2 && chars.length - index - 1 > maxChars)) {
       continue;
     }
     const distance = Math.abs(index - middle);
@@ -88,7 +88,7 @@ export const wrapSubtitleText = (
   }
 
   if (breakAt <= 0) {
-    breakAt = Math.ceil(chars.length / 2);
+    breakAt = Math.min(maxChars, Math.ceil(chars.length / 2));
   }
 
   const first = chars.slice(0, breakAt).join("").trim();
@@ -170,7 +170,7 @@ export const sanitizeCues = (raw: unknown, fps: number, totalFrames: number): Su
     }
     const item = entry as Record<string, unknown>;
     const text =
-      typeof item.text === "string" ? item.text.replace(/\s+/g, " ").trim().slice(0, SUBTITLE_LIMITS.maxCueChars) : "";
+      typeof item.text === "string" ? Array.from(item.text.replace(/\s+/g, " ").trim()).slice(0, SUBTITLE_LIMITS.maxCueChars).join("") : "";
     const startFrame = typeof item.startFrame === "number" && Number.isFinite(item.startFrame) ? Math.max(0, item.startFrame) : null;
     const endFrame = typeof item.endFrame === "number" && Number.isFinite(item.endFrame) ? Math.min(totalFrames, item.endFrame) : null;
 
@@ -183,7 +183,8 @@ export const sanitizeCues = (raw: unknown, fps: number, totalFrames: number): Su
           .slice(0, SUBTITLE_LIMITS.maxLinesPerCue)
           .filter((line): line is string => typeof line === "string" && line.trim().length > 0)
       : [];
-    const wrapped = lines.length > 0 ? lines : wrapSubtitleText(text);
+    const wrapped = lines.length > 0 && lines.every((line) => Array.from(line).length <= SUBTITLE_LIMITS.lineMaxChars)
+      ? lines : wrapSubtitleText(text);
 
     cues.push({
       text,
@@ -195,14 +196,10 @@ export const sanitizeCues = (raw: unknown, fps: number, totalFrames: number): Su
 
   // 保证时间轴单调递增，避免出现重叠字幕
   cues.sort((a, b) => a.startFrame - b.startFrame);
-  for (let index = 1; index < cues.length; index += 1) {
-    if (cues[index].startFrame < cues[index - 1].endFrame) {
-      cues[index].startFrame = cues[index - 1].endFrame;
-    }
-    if (cues[index].endFrame <= cues[index].startFrame) {
-      cues[index].endFrame = Math.min(totalFrames, cues[index].startFrame + Math.max(1, Math.round(0.6 * fps)));
-    }
+  const clean: SubtitleCue[] = [];
+  for (const cue of cues) {
+    cue.startFrame = Math.max(cue.startFrame, clean.at(-1)?.endFrame ?? 0);
+    if (cue.endFrame > cue.startFrame) clean.push(cue);
   }
-
-  return cues;
+  return clean;
 };

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="680" height="800" viewBox="0 0 680 800">
+  <rect width="680" height="800" rx="24" fill="#101D2B"/>
+  <rect x="1" y="1" width="678" height="798" rx="23" fill="none" stroke="#3A4857" stroke-width="2"/>
+  <path d="M40 100h600M40 710h600" stroke="#3A4857" stroke-width="2"/>
+  <text x="40" y="758" fill="#AABACC" font-size="16" font-family="sans-serif" letter-spacing="3">OBSERVE · CHANGE · UNDERSTAND</text>
+</svg>

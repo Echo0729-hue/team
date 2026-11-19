@@ -16,12 +16,13 @@ export const TechTemplate: React.FC<VideoProps> = ({
   lines,
   backgroundColor,
   accentColor,
+  narration,
 }) => {
   const frame = useCurrentFrame();
   const { fps, durationInFrames, unit, pad, gap, width, height, short, portrait } = useLayout();
   const palette = paletteFor(backgroundColor);
   const safeLines = linesOf(lines);
-  const tl = getTimeline(durationInFrames);
+  const tl = getTimeline(durationInFrames, narration);
 
   const specs = analyzeLines({ title, lines: safeLines });
   const active = getActiveIndex(frame, tl);
@@ -42,7 +43,7 @@ export const TechTemplate: React.FC<VideoProps> = ({
     fps,
     config: { damping: 26, stiffness: 90 },
   });
-  const outro = interpolate(frame, [tl.outroStart, tl.total - 1], [1, 0], CLAMP);
+  const outro = interpolate(frame, [tl.outroStart, Math.max(tl.outroStart + 1, tl.total - 1)], [1, 0], CLAMP);
   const progress = interpolate(frame, [0, tl.total - 1], [0, 1], CLAMP);
 
   const glowX = interpolate(frame, [0, tl.total], [46, 54], CLAMP);

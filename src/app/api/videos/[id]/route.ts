@@ -1,3 +1,4 @@
+import { parseByteRange } from "@/lib/httpRange";
 import fs from "node:fs";
 import { Readable } from "node:stream";
 import { NextResponse } from "next/server";
@@ -12,40 +13,6 @@ export const dynamic = "force-dynamic";
 // node:stream/web 的 ReadableStream 与 DOM 类型定义不同，这里统一转换成 Web 的流
 const toWebStream = (stream: ReturnType<typeof fs.createReadStream>): ReadableStream =>
   Readable.toWeb(stream) as unknown as ReadableStream;
-
-const parseRange = (
-  rangeHeader: string,
-  fileSize: number,
-): { start: number; end: number } | null => {
-  const match = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim());
-  if (!match) {
-    return null;
-  }
-
-  const [, rawStart, rawEnd] = match;
-  let start: number;
-  let end: number;
-
-  if (rawStart === "" && rawEnd === "") {
-    return null;
-  }
-
-  if (rawStart === "") {
-    // bytes=-500 表示最后 500 字节
-    const suffixLength = Number.parseInt(rawEnd, 10);
-    start = Math.max(0, fileSize - suffixLength);
-    end = fileSize - 1;
-  } else {
-    start = Number.parseInt(rawStart, 10);
-    end = rawEnd === "" ? fileSize - 1 : Math.min(Number.parseInt(rawEnd, 10), fileSize - 1);
-  }
-
-  if (Number.isNaN(start) || Number.isNaN(end) || start > end || start >= fileSize) {
-    return null;
-  }
-
-  return { start, end };
-};
 
 /**
  * 播放/下载已渲染好的 MP4。支持 Range 请求，浏览器 <video> 可以拖动进度条。
@@ -90,7 +57,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
   });
 
   if (rangeHeader) {
-    const range = parseRange(rangeHeader, fileSize);
+    const range = parseByteRange(rangeHeader, fileSize);
     if (!range) {
       headers.set("Content-Range", `bytes */${fileSize}`);
       return new Response(null, { status: 416, headers });

@@ -16,12 +16,13 @@ export const QuoteTemplate: React.FC<VideoProps> = ({
   lines,
   backgroundColor,
   accentColor,
+  narration,
 }) => {
   const frame = useCurrentFrame();
   const { fps, durationInFrames, unit, pad, gap, portrait, width } = useLayout();
   const palette = paletteFor(backgroundColor);
   const safeLines = linesOf(lines);
-  const tl = getTimeline(durationInFrames);
+  const tl = getTimeline(durationInFrames, narration);
 
   const specs = analyzeLines({ title, lines: safeLines });
   const active = getActiveIndex(frame, tl);
@@ -30,7 +31,7 @@ export const QuoteTemplate: React.FC<VideoProps> = ({
   const visualW = portrait ? Math.min(width * 0.4, 420) : Math.min(width * 0.24, 400);
   const visualH = visualW * 0.625;
 
-  const outro = interpolate(frame, [tl.outroStart, tl.total - 1], [1, 0], CLAMP);
+  const outro = interpolate(frame, [tl.outroStart, Math.max(tl.outroStart + 1, tl.total - 1)], [1, 0], CLAMP);
   const quoteIn = spring({
     frame,
     fps,
@@ -43,8 +44,6 @@ export const QuoteTemplate: React.FC<VideoProps> = ({
     config: { damping: 26, stiffness: 80 },
     durationInFrames: Math.max(12, tl.intro),
   });
-
-  const fade = Math.max(8, Math.round(tl.enter * 0.7));
 
   return (
     <AbsoluteFill style={{ backgroundColor, fontFamily: FONT_SANS, overflow: "hidden" }}>
@@ -128,7 +127,9 @@ export const QuoteTemplate: React.FC<VideoProps> = ({
             {safeLines.map((line, index) => {
               const start = tl.lineStarts[index];
               const end = index < 2 ? tl.lineStarts[index + 1] : tl.total - 1;
-              const opacity = interpolate(
+              const fade = Math.max(1, Math.min(Math.round(tl.enter * 0.7), Math.floor((end - start) / 3)));
+              // The final paragraph uses the shared outro so it stays visible until speech ends.
+              const opacity = index === 2 ? interpolate(frame, [start, start + fade], [0, 1], CLAMP) : interpolate(
                 frame,
                 [start, start + fade, end - fade, end],
                 [0, 1, 1, 0],

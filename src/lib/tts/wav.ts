@@ -20,16 +20,20 @@ export const parseWav = (buffer: Buffer): PcmWav => {
   let channels = 1;
   let bitsPerSample = 16;
   let data: Buffer | null = null;
+  let hasFormat = false;
 
   while (offset + 8 <= buffer.length) {
     const id = buffer.toString("ascii", offset, offset + 4);
     const size = buffer.readUInt32LE(offset + 4);
     const body = offset + 8;
+    if (body + size > buffer.length) throw new Error("配音 WAV 数据不完整，请重新生成。");
 
     if (id === "fmt ") {
+      if (size < 16 || buffer.readUInt16LE(body) !== 1) throw new Error("配音必须使用 PCM WAV 格式。");
       channels = buffer.readUInt16LE(body + 2);
       sampleRate = buffer.readUInt32LE(body + 4);
       bitsPerSample = buffer.readUInt16LE(body + 14);
+      hasFormat = true;
     } else if (id === "data") {
       data = buffer.subarray(body, Math.min(buffer.length, body + size));
     }
@@ -37,7 +41,8 @@ export const parseWav = (buffer: Buffer): PcmWav => {
     offset = body + size + (size % 2);
   }
 
-  if (!data || data.length === 0) {
+  if (!hasFormat || !data || data.length === 0 || channels <= 0 || sampleRate <= 0 ||
+    ![8, 16, 24, 32].includes(bitsPerSample) || data.length % (channels * bitsPerSample / 8) !== 0) {
     throw new Error("配音文件缺少音频数据。");
   }
 
@@ -76,7 +81,7 @@ export const pcmDurationSeconds = (wav: PcmWav): number => {
 export const silenceBuffer = (seconds: number, wav: Pick<PcmWav, "sampleRate" | "channels" | "bitsPerSample">): Buffer => {
   const frameBytes = (wav.channels * wav.bitsPerSample) / 8;
   const bytes = Math.max(0, Math.round(seconds * wav.sampleRate) * frameBytes);
-  return Buffer.alloc(bytes);
+  return Buffer.alloc(bytes, wav.bitsPerSample === 8 ? 128 : 0);
 };
 /**
  * 峰值归一化：把整体电平提到接近 -1 dBFS，避免配音过轻或过响。

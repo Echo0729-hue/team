@@ -35,6 +35,7 @@ import {
   type SubtitleProps,
 } from "./subtitles";
 import { sanitizeLayers, type Layer } from "./layers";
+import { sanitizeEffects, type VideoEffect } from "./effects";
 
 /* ------------------------------ 画面比例 ------------------------------ */
 
@@ -62,7 +63,7 @@ export const RATIO_MAP: Record<RatioId, VideoRatio> = Object.fromEntries(
 ) as Record<RatioId, VideoRatio>;
 
 export const isRatioId = (value: unknown): value is RatioId =>
-  typeof value === "string" && value in RATIO_MAP;
+  typeof value === "string" && Object.hasOwn(RATIO_MAP, value);
 
 /* ------------------------------ 画面模板 ------------------------------ */
 
@@ -90,11 +91,12 @@ export const TEMPLATE_MAP: Record<TemplateId, VideoTemplateMeta> = Object.fromEn
 ) as Record<TemplateId, VideoTemplateMeta>;
 
 export const isTemplateId = (value: unknown): value is TemplateId =>
-  typeof value === "string" && value in TEMPLATE_MAP;
+  typeof value === "string" && Object.hasOwn(TEMPLATE_MAP, value);
 
 /* ------------------------------ 视频参数 ------------------------------ */
 
 export type VideoProps = {
+  manimAssets?: Record<string, import("./manim").ManimAsset>;
   title: string;
   lines: string[];
   backgroundColor: string;
@@ -111,6 +113,8 @@ export type VideoProps = {
   subtitles: SubtitleProps;
   /** 画面图层（图片 / 文字），编辑画布与导出共用 */
   layers: Layer[];
+  /** Optional for old projects and integrations. Always sanitized before export. */
+  effects?: VideoEffect[];
 };
 
 export const DEFAULT_VIDEO_PROPS: VideoProps = {
@@ -147,6 +151,7 @@ export const DEFAULT_VIDEO_PROPS: VideoProps = {
     cues: [],
   },
   layers: [],
+  effects: [],
 };
 
 /** 由比例推导真实画布尺寸（Composition、Player、导出共用） */
@@ -353,6 +358,7 @@ export const validateVideoInput = (raw: unknown): ValidationResult => {
   }
 
   const layers = sanitizeLayers(source.layers, totalFrames);
+  const effects = sanitizeEffects(source.effects, totalFrames);
 
   return {
     ok: true,
@@ -368,6 +374,7 @@ export const validateVideoInput = (raw: unknown): ValidationResult => {
       narration,
       subtitles,
       layers,
+      effects,
     },
   };
 };

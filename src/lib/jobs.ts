@@ -75,6 +75,14 @@ export const createJob = (
 
 export const getJob = (id: string): RenderJob | undefined => jobStore.get(id);
 
+/** Sources must remain available until every queued or running merge finishes. */
+export const isVideoInUse = (id: string): boolean => [...jobStore.values()].some((job) =>
+  (job.status === "queued" || job.status === "rendering") && job.merge?.segmentIds.includes(id));
+
+export const isUploadInUse = (src: string): boolean => [...jobStore.values()].some((job) =>
+  (job.status === "queued" || job.status === "rendering") &&
+  job.props.layers.some((layer) => layer.kind === "image" && !layer.hidden && layer.src === src));
+
 export const updateJob = (id: string, patch: Partial<RenderJob>): RenderJob | undefined => {
   const job = jobStore.get(id);
   if (!job) {

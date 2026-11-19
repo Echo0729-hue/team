@@ -28,7 +28,8 @@ const main = async () => {
   await fs.promises.mkdir(outputDir, { recursive: true });
 
   console.log("[1/3] 打包 Remotion 入口：", entryPoint);
-  const { serveUrl } = await getBundleServer(entryPoint);
+  const { serveUrl, close } = await getBundleServer(entryPoint);
+  try {
   const port = await getRenderPort();
 
   console.log("[2/3] 读取合成参数…", browserExecutable ? `浏览器：${browserExecutable}` : "使用 Remotion 自动下载的浏览器");
@@ -65,6 +66,9 @@ const main = async () => {
   const stat = await fs.promises.stat(outputLocation);
   console.log("完成:", outputLocation);
   console.log("文件大小:", (stat.size / 1024 / 1024).toFixed(2), "MB");
+  } finally {
+    await close();
+  }
 };
 
 main().catch((error) => {

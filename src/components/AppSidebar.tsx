@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import type { WorkbenchView } from "./Workbench";
 
 export type { WorkbenchView };
@@ -36,14 +37,39 @@ type AppSidebarProps = {
   onNavigate: (view: WorkbenchView) => void;
   open: boolean;
   onClose: () => void;
+  demo?: boolean;
 };
 
 /** 左侧主导航：生成视频 / 视频拼接 / 素材库 */
-export default function AppSidebar({ view, onNavigate, open, onClose }: AppSidebarProps) {
+export default function AppSidebar({ view, onNavigate, open, onClose, demo }: AppSidebarProps) {
+  const sidebarRef = useRef<HTMLElement>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    if (!open || !window.matchMedia("(max-width: 1080px)").matches) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    sidebarRef.current?.querySelector<HTMLButtonElement>('[aria-current="page"]')?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.preventDefault(); closeRef.current(); return; }
+      if (event.key !== "Tab") return;
+      const buttons = [...(sidebarRef.current?.querySelectorAll<HTMLElement>("button:not(:disabled), a[href]") ?? [])].filter((element) => element.getClientRects().length);
+      const first = buttons[0], last = buttons[buttons.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = overflow;
+      if (previous?.isConnected) previous.focus();
+    };
+  }, [open]);
   return (
     <>
-      <aside className={`sidebar${open ? " open" : ""}`} aria-label="主导航">
-        <div className="sidebar-label">工作区</div>
+      <aside id="main-navigation" ref={sidebarRef} className={`sidebar${open ? " open" : ""}`} aria-label="主导航">
+        <div className="sidebar-heading"><div className="sidebar-label">创作工作区</div><button type="button" className="sidebar-close" aria-label="收起导航" onClick={onClose}>关闭</button></div>
         <nav className="sidebar-nav">
           {items.map((item) => {
             const active = view === item.id;
@@ -67,11 +93,12 @@ export default function AppSidebar({ view, onNavigate, open, onClose }: AppSideb
             );
           })}
         </nav>
+        <a className="demo-entry" href={demo ? "/" : "/demo"}>{demo ? "返回我的工作区" : "打开完整功能 Demo"}<span aria-hidden="true">↗</span></a>
 
         <div className="sidebar-foot">
           <div className="sidebar-note">
-            <strong>本地渲染</strong>
-            <span>Remotion + FFmpeg · 视频保存在 output/</span>
+            <strong><span className="local-status-dot" aria-hidden="true" />本地工作区</strong>
+            <span>草稿保存在当前浏览器<br />成片可在素材库查看与下载</span>
           </div>
         </div>
       </aside>

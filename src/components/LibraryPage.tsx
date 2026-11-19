@@ -4,6 +4,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import SiteHeader from "./SiteHeader";
 import Toast from "./Toast";
 import VideoLightbox from "./VideoLightbox";
+import DownloadVideo from "./DownloadVideo";
+import SpotlightCard from "./react-bits/SpotlightCard";
+import AnimatedContent from "./react-bits/AnimatedContent";
 import type { PublicLibraryItem } from "@/lib/library";
 import type { WorkbenchView } from "./Workbench";
 
@@ -53,9 +56,10 @@ const icons = {
 type LibraryPageProps = {
   onNavigate: (view: WorkbenchView) => void;
   onOpenNav: () => void;
+  selectionKey?: string;
 };
 
-export default function LibraryPage({ onNavigate, onOpenNav }: LibraryPageProps) {
+export default function LibraryPage({ onNavigate, onOpenNav, selectionKey = SELECTION_KEY }: LibraryPageProps) {
   const [items, setItems] = useState<PublicLibraryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -118,19 +122,19 @@ export default function LibraryPage({ onNavigate, onOpenNav }: LibraryPageProps)
   const addToMerge = useCallback(
     (id: string) => {
       try {
-        const raw = window.localStorage.getItem(SELECTION_KEY);
+        const raw = window.localStorage.getItem(selectionKey);
         const parsed: unknown = raw ? JSON.parse(raw) : [];
         const ids = Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string") : [];
         if (!ids.includes(id)) {
           ids.push(id);
         }
-        window.localStorage.setItem(SELECTION_KEY, JSON.stringify(ids));
+        window.localStorage.setItem(selectionKey, JSON.stringify(ids));
       } catch {
         // 忽略写入失败
       }
       onNavigate("merge");
     },
-    [onNavigate],
+    [onNavigate, selectionKey],
   );
 
   const saveRename = useCallback(
@@ -184,6 +188,10 @@ export default function LibraryPage({ onNavigate, onOpenNav }: LibraryPageProps)
         return;
       }
       setItems((previous) => previous.filter((entry) => entry.id !== deleting.id));
+      try {
+        const raw = JSON.parse(window.localStorage.getItem(selectionKey) ?? "[]");
+        if (Array.isArray(raw)) window.localStorage.setItem(selectionKey, JSON.stringify(raw.filter((id) => id !== deleting.id)));
+      } catch {}
       setToast(`已删除「${deleting.name}」`);
       setDeleting(null);
       void load();
@@ -192,7 +200,7 @@ export default function LibraryPage({ onNavigate, onOpenNav }: LibraryPageProps)
     } finally {
       setDeleteBusy(false);
     }
-  }, [deleting, load]);
+  }, [deleting, load, selectionKey]);
 
   return (
     <>
@@ -214,7 +222,7 @@ export default function LibraryPage({ onNavigate, onOpenNav }: LibraryPageProps)
       />
 
       <main className="page">
-        <div className="page-head">
+        <AnimatedContent className="page-head">
           <div>
             <h1 className="page-title">素材库</h1>
             <p className="page-sub">所有导出过的视频都在这里：播放、改名、加入拼接或删除。</p>
@@ -235,7 +243,7 @@ export default function LibraryPage({ onNavigate, onOpenNav }: LibraryPageProps)
               </button>
             ) : null}
           </div>
-        </div>
+        </AnimatedContent>
 
         {error ? (
           <div className="alert error" role="alert">
@@ -285,7 +293,7 @@ export default function LibraryPage({ onNavigate, onOpenNav }: LibraryPageProps)
             {filtered.map((item) => {
               const isEditing = editingId === item.id;
               return (
-                <article key={item.id} className="lib-card">
+                <SpotlightCard as="article" key={item.id} className="lib-card" spotlightColor="rgba(15, 118, 110, 0.08)" spotlightSize={320}>
                   <button
                     type="button"
                     className="lib-thumb"
@@ -358,10 +366,10 @@ export default function LibraryPage({ onNavigate, onOpenNav }: LibraryPageProps)
                             {icons.play}
                             播放
                           </button>
-                          <a className="icon-btn" href={item.downloadUrl} download={item.downloadFileName}>
+                          <DownloadVideo id={item.id} name={item.name} className="icon-btn" href={item.downloadUrl}>
                             {icons.download}
                             下载
-                          </a>
+                          </DownloadVideo>
                           <button
                             type="button"
                             className="icon-btn"
@@ -393,7 +401,7 @@ export default function LibraryPage({ onNavigate, onOpenNav }: LibraryPageProps)
                       </>
                     )}
                   </div>
-                </article>
+                </SpotlightCard>
               );
             })}
           </div>
@@ -406,6 +414,7 @@ export default function LibraryPage({ onNavigate, onOpenNav }: LibraryPageProps)
             className="lightbox-video"
             src={playing.videoUrl}
             controls
+            controlsList="nofullscreen nodownload"
             autoPlay
             playsInline
             preload="metadata"

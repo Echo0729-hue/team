@@ -1,4 +1,4 @@
-import type { TtsProviderId } from "@/remotion/narration";
+import type { NarrationScene, TtsProviderId } from "@/remotion/narration";
 import type { PcmWav } from "./wav";
 
 export type VoiceOption = {
@@ -32,6 +32,7 @@ export type TtsCue = {
   endSeconds: number;
   startFrame: number;
   endFrame: number;
+  sceneId?: NarrationScene["id"];
 };
 
 export type TtsRecord = {
@@ -47,6 +48,13 @@ export type TtsRecord = {
   cues: TtsCue[];
   chunkCount: number;
   createdAt: string;
+  scenes?: NarrationScene[];
+  contentKey?: string;
+};
+
+export type TtsResult = Pick<TtsRecord, "id" | "durationSeconds" | "voiceId" | "voiceName" | "provider" | "speed" | "script" | "cues" | "chunkCount" | "scenes" | "contentKey"> & {
+  audioUrl: string;
+  srtUrl: string;
 };
 
 export type TtsConfig = {

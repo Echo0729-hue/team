@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { RatioId, TemplateId } from "@/remotion/params";
+import { isRatioId, isTemplateId, type RatioId, type TemplateId } from "@/remotion/params";
+import { resolveInside } from "./filePaths";
 import {
   buildUniqueVideoName,
   sanitizeVideoName,
@@ -51,13 +52,19 @@ const readFile = (): LibraryFile => {
   try {
     const raw = fs.readFileSync(LIBRARY_FILE, "utf8");
     const parsed = JSON.parse(raw) as LibraryFile;
-    if (Array.isArray(parsed.items)) {
+    if (Array.isArray(parsed?.items) && parsed.items.every((item) => item &&
+      typeof item.id === "string" && typeof item.title === "string" && typeof item.fileName === "string" &&
+      typeof item.createdAt === "string" && isRatioId(item.ratio) && isTemplateId(item.template) &&
+      Number.isInteger(item.durationInFrames) && item.durationInFrames > 0 &&
+      Number.isFinite(item.durationInSeconds) && item.durationInSeconds > 0 &&
+      resolveInside(OUTPUT_DIR, item.fileName))) {
       return { items: parsed.items.map(normalizeItem) };
     }
-  } catch {
-    // 文件不存在或损坏时视为空库
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { items: [] };
+    throw new Error("素材库记录读取失败，原文件已保留；请检查 output/library.json 或从备份恢复。");
   }
-  return { items: [] };
+  throw new Error("素材库记录格式不正确，原文件已保留；请从备份恢复。");
 };
 
 const writeFile = (data: LibraryFile): void => {
@@ -125,12 +132,7 @@ export const removeLibraryItem = (id: string): LibraryItem | undefined => {
 
 /** 素材文件名解析成绝对路径，并限制在 output/ 内 */
 export const resolveLibraryFilePath = (fileName: string): string => {
-  const root = path.resolve(OUTPUT_DIR);
-  const target = path.resolve(root, fileName);
-  if (target !== root && !target.startsWith(`${root}${path.sep}`)) {
-    throw new Error("非法的素材路径，已拒绝操作。");
-  }
-  return target;
+  return resolveInside(OUTPUT_DIR, fileName);
 };
 
 export const toPublicLibraryItem = (item: LibraryItem) => ({

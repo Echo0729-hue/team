@@ -9,6 +9,7 @@ import { QuoteTemplate } from "./templates/QuoteTemplate";
 import { KineticTemplate } from "./templates/KineticTemplate";
 import { SubtitleTrack } from "./SubtitleTrack";
 import { OverlayLayers } from "./OverlayLayers";
+import { EffectTrack, SceneEffects } from "./EffectTrack";
 
 /**
  * 唯一的视频组件：按 template 派发到 6 套画面。
@@ -40,10 +41,14 @@ export const TextPromoVideo: React.FC<VideoProps> = (props) => {
 
   return (
     <AbsoluteFill style={{ backgroundColor: props.backgroundColor }}>
-      {body}
-      <OverlayLayers layers={props.layers ?? []} />
+      <SceneEffects effects={props.effects ?? []}>
+        {body}
+        <EffectTrack effects={props.effects ?? []} placement="back" manimAssets={props.manimAssets} />
+        <OverlayLayers layers={props.layers ?? []} />
+        <EffectTrack effects={props.effects ?? []} placement="front" manimAssets={props.manimAssets} />
+        {hasSubtitles ? <SubtitleTrack subtitles={subtitles} /> : null}
+      </SceneEffects>
       {hasNarration ? <Audio src={narration.audioSrc as string} volume={narration.volume} /> : null}
-      {hasSubtitles ? <SubtitleTrack subtitles={subtitles} /> : null}
     </AbsoluteFill>
   );
 };

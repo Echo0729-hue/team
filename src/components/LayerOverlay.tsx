@@ -35,9 +35,30 @@ export default function LayerOverlay({
 }: LayerOverlayProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
+  const pointerRef = useRef<{ id: number; target: Element } | null>(null);
   const [frameRect, setFrameRect] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
   const [textHeights, setTextHeights] = useState<Record<string, number>>({});
   const [guides, setGuides] = useState<{ x: boolean; y: boolean }>({ x: false, y: false });
+
+  const end = useCallback(() => {
+    dragRef.current = null;
+    const pointer = pointerRef.current;
+    pointerRef.current = null;
+    if (pointer?.target.hasPointerCapture(pointer.id)) pointer.target.releasePointerCapture(pointer.id);
+    setGuides({ x: false, y: false });
+  }, []);
+
+  useEffect(() => {
+    window.addEventListener("blur", end);
+    return () => { window.removeEventListener("blur", end); end(); };
+  }, [end]);
+
+  const capture = (event: React.PointerEvent): boolean => {
+    if (pointerRef.current || event.button !== 0) return false;
+    pointerRef.current = { id: event.pointerId, target: event.currentTarget };
+    try { event.currentTarget.setPointerCapture(event.pointerId); } catch {}
+    return true;
+  };
 
   const measure = useCallback(() => {
     const root = rootRef.current;
@@ -99,7 +120,7 @@ export default function LayerOverlay({
   };
 
   const begin = (event: React.PointerEvent, layer: Layer) => {
-    if (playing) {
+    if (playing || pointerRef.current) {
       return;
     }
     event.stopPropagation();
@@ -113,11 +134,7 @@ export default function LayerOverlay({
       return;
     }
     const rect = frame.getBoundingClientRect();
-    try {
-      event.currentTarget.setPointerCapture(event.pointerId);
-    } catch {
-      // 合成事件（自动化测试）没有真实指针，忽略
-    }
+    if (!capture(event)) return;
 
     if (event.shiftKey && layer.kind === "image") {
       const centerX = rect.left + layer.x * rect.width;
@@ -146,7 +163,7 @@ export default function LayerOverlay({
   };
 
   const beginScale = (event: React.PointerEvent, layer: ImageLayer) => {
-    if (playing || layer.locked) {
+    if (playing || layer.locked || pointerRef.current) {
       return;
     }
     event.stopPropagation();
@@ -155,11 +172,7 @@ export default function LayerOverlay({
       return;
     }
     const rect = frame.getBoundingClientRect();
-    try {
-      event.currentTarget.setPointerCapture(event.pointerId);
-    } catch {
-      // 合成事件（自动化测试）没有真实指针，忽略
-    }
+    if (!capture(event)) return;
     dragRef.current = {
       mode: "scale",
       id: layer.id,
@@ -173,7 +186,7 @@ export default function LayerOverlay({
   };
 
   const beginRotate = (event: React.PointerEvent, layer: Layer) => {
-    if (playing || layer.locked) {
+    if (playing || layer.locked || pointerRef.current) {
       return;
     }
     event.stopPropagation();
@@ -184,11 +197,7 @@ export default function LayerOverlay({
     const rect = frame.getBoundingClientRect();
     const centerX = rect.left + layer.x * rect.width;
     const centerY = rect.top + layer.y * rect.height;
-    try {
-      event.currentTarget.setPointerCapture(event.pointerId);
-    } catch {
-      // 合成事件（自动化测试）没有真实指针，忽略
-    }
+    if (!capture(event)) return;
     dragRef.current = {
       mode: "rotate",
       id: layer.id,
@@ -201,7 +210,7 @@ export default function LayerOverlay({
 
   const move = (event: React.PointerEvent) => {
     const drag = dragRef.current;
-    if (!drag) {
+    if (!drag || event.pointerId !== pointerRef.current?.id) {
       return;
     }
 
@@ -212,8 +221,8 @@ export default function LayerOverlay({
       const snapY = Math.abs(nextY - 0.5) < SNAP_THRESHOLD;
       setGuides({ x: snapX, y: snapY });
       onChange(drag.id, {
-        x: snapX ? 0.5 : Math.round(nextX * 10000) / 10000,
-        y: snapY ? 0.5 : Math.round(nextY * 10000) / 10000,
+        x: snapX ? 0.5 : Math.min(1.2, Math.max(-0.2, Math.round(nextX * 10000) / 10000)),
+        y: snapY ? 0.5 : Math.min(1.2, Math.max(-0.2, Math.round(nextY * 10000) / 10000)),
       });
       return;
     }
@@ -239,9 +248,8 @@ export default function LayerOverlay({
     onChange(drag.id, { rotation: Math.round(normalized) });
   };
 
-  const end = () => {
-    dragRef.current = null;
-    setGuides({ x: false, y: false });
+  const endPointer = (event: React.PointerEvent) => {
+    if (event.pointerId === pointerRef.current?.id) end();
   };
 
   if (playing) {
@@ -276,8 +284,9 @@ export default function LayerOverlay({
             }}
             onPointerDown={(event) => begin(event, layer)}
             onPointerMove={move}
-            onPointerUp={end}
-            onPointerCancel={end}
+            onPointerUp={endPointer}
+            onPointerCancel={endPointer}
+            onLostPointerCapture={endPointer}
           >
             {selected ? (
               <>

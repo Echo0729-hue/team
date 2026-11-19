@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getTtsConfig, synthesizeNarration, ttsAudioUrl } from "@/lib/tts";
-import { NARRATION_LIMITS } from "@/remotion/narration";
+import { NARRATION_LIMITS, parseNarrationScenes, type NarrationContent } from "@/remotion/narration";
+import { validateVideoInput, DEFAULT_VIDEO_PROPS } from "@/remotion/params";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,6 +20,16 @@ export async function POST(request: Request) {
   const script = typeof source.script === "string" ? source.script.trim() : "";
   const voiceId = typeof source.voiceId === "string" ? source.voiceId : "";
   const speed = typeof source.speed === "number" && Number.isFinite(source.speed) ? source.speed : 1;
+  let content: NarrationContent | undefined;
+  if (source.content !== undefined) {
+    const candidate = (typeof source.content === "object" && source.content !== null && !Array.isArray(source.content) ? source.content : {}) as Record<string, unknown>;
+    const checked = validateVideoInput({ ...DEFAULT_VIDEO_PROPS, ...candidate, narration: { enabled: false } });
+    if (typeof candidate.title !== "string" || !Array.isArray(candidate.lines) || candidate.lines.length !== 3 ||
+      !checked.ok || !parseNarrationScenes(script)) {
+      return NextResponse.json({ message: "请填写标题和三段文案；讲解稿分成四段，依次对应标题与三段正文，每段另起一行。" }, { status: 400 });
+    }
+    content = { title: checked.value.title, lines: checked.value.lines };
+  }
 
   if (script.length === 0) {
     return NextResponse.json({ message: "请先填写讲解稿。" }, { status: 400 });
@@ -39,7 +50,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const record = await synthesizeNarration({ script, voiceId, speed });
+    const record = await synthesizeNarration({ script, voiceId, speed, content });
     return NextResponse.json({
       tts: {
         id: record.id,
@@ -53,6 +64,8 @@ export async function POST(request: Request) {
         script: record.script,
         cues: record.cues,
         chunkCount: record.chunkCount,
+        scenes: record.scenes,
+        contentKey: record.contentKey,
       },
     });
   } catch (error) {

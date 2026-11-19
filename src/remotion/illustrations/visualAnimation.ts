@@ -22,7 +22,7 @@ export const getVisualAnimation = (
   const exitSpan = Math.min(timeline.enter, Math.max(6, Math.round((end - start) * 0.18)));
   const exit =
     index === 2
-      ? interpolate(frame, [timeline.outroStart, timeline.total - 1], [0, 1], CLAMP)
+      ? interpolate(frame, [timeline.outroStart, Math.max(timeline.outroStart + 1, timeline.total - 1)], [0, 1], CLAMP)
       : interpolate(frame, [end - exitSpan, end], [0, 1], CLAMP);
 
   const pulseStart = start + timeline.enter;

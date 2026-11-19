@@ -3,6 +3,10 @@ import { getDurationInFrames, validateVideoInput } from "@/remotion/params";
 import { createJob, toPublicJob } from "@/lib/jobs";
 import { enqueueRender } from "@/lib/renderQueue";
 import { sanitizeVideoName } from "@/lib/videoName";
+import { getTtsRecord } from "@/lib/tts";
+import { NarrationValidationError, prepareNarratedVideo } from "@/lib/narrationValidation";
+import { normalizeManimInput, ManimInputError } from "@/lib/manim";
+import { isManimEffect } from "@/remotion/manim";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -30,7 +34,18 @@ export async function POST(request: Request) {
   const rawName = typeof payload === "object" && payload !== null ? (payload as { name?: unknown }).name : undefined;
   const name = sanitizeVideoName(rawName, result.value.title);
 
-  const job = createJob(result.value, getDurationInFrames(result.value), { name });
+  let props = result.value;
+  try {
+    if (props.narration.enabled) props = prepareNarratedVideo(props, getTtsRecord(props.narration.ttsId ?? ""));
+    (props.effects ?? []).filter((e) => isManimEffect(e) && !e.hidden).forEach(normalizeManimInput);
+  } catch (error) {
+    if (error instanceof NarrationValidationError) {
+      return NextResponse.json({ message: error.message, code: error.code }, { status: 409 });
+    }
+    if (error instanceof ManimInputError) return NextResponse.json({ message: error.message }, { status: 400 });
+    throw error;
+  }
+  const job = createJob(props, getDurationInFrames(props), { name });
   enqueueRender(job);
 
   return NextResponse.json({ job: toPublicJob(job) }, { status: 202 });

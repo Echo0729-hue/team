@@ -27,7 +27,7 @@ const MenuIcon = () => (
 export default function SiteHeader({ view, projectName, status, actions, onOpenNav }: SiteHeaderProps) {
   return (
     <header className="topnav">
-      <button type="button" className="nav-toggle" aria-label="打开导航" onClick={onOpenNav}>
+      <button type="button" className="nav-toggle" aria-label="打开导航" aria-controls="main-navigation" onClick={onOpenNav}>
         <MenuIcon />
       </button>
 

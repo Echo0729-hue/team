@@ -1,0 +1,11 @@
+node_modules/
+.next/
+output/
+.test-build/
+test-results/
+*.tsbuildinfo
+.env*
+!.env.example
+.venv-manim/
+.tools/
+__pycache__/

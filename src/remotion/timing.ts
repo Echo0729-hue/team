@@ -1,7 +1,6 @@
-/**
- * 统一的时间轴：所有模板按「总帧数」分配标题、三段文案与结尾的时间，
- * 5 秒版本更紧凑、15 秒版本更从容，而不是把固定帧号写死。
- */
+import { sanitizeNarrationScenes, type NarrationProps } from "./narration";
+
+/** All templates use measured narration scene starts; silent videos keep proportional timing. */
 export type Timeline = {
   total: number;
   /** 标题入场占用的帧数 */
@@ -21,8 +20,18 @@ export type Timeline = {
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(max, Math.max(min, value));
 
-export const getTimeline = (durationInFrames: number): Timeline => {
+export const getTimeline = (durationInFrames: number, narration?: NarrationProps): Timeline => {
   const total = Math.max(30, durationInFrames);
+  const scenes = narration?.enabled ? sanitizeNarrationScenes(narration.scenes) : [];
+  if (scenes.length === 4 && scenes[3].endFrame <= total) {
+    const lineStarts = scenes.slice(1).map((scene) => scene.startFrame) as [number, number, number];
+    const shortest = Math.min(...scenes.map((scene) => scene.endFrame - scene.startFrame));
+    // At the 15-second cap there may be no tail; keep the picture visible through the last word.
+    const outroStart = Math.max(scenes[3].endFrame, total - 15);
+    return { total, intro: Math.max(1, lineStarts[0]), slot: (total - lineStarts[0]) / 3,
+      lineStarts, enter: Math.max(1, Math.min(30, Math.floor(shortest / 3))),
+      outro: total - outroStart, outroStart };
+  }
   const outro = Math.round(clamp(total * 0.07, 8, 30));
   const intro = Math.round(clamp(total * 0.17, 12, 72));
   const content = Math.max(60, total - intro - outro);
